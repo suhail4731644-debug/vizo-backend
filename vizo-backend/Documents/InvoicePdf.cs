@@ -69,6 +69,13 @@ public static class InvoicePdf
         int LineNo, string Name, string? Sku, int Packing,
         int Qty, decimal Rate, decimal DiscountPercent, decimal TaxPercent, decimal LineTotal);
 
+    /// <summary>
+    /// One line of the appended "Dispatching" page -- what was asked for
+    /// against what actually left the shelf. Added 23 September for the
+    /// Packing screen; see SalesController.RebuildBillWithDispatch.
+    /// </summary>
+    public sealed record DispatchLine(string Name, string? Sku, int Requested, int Dispatched);
+
     public sealed record Data(
         // seller -- straight off the "Company" row
         string CompanyName, string CompanyLegalName, string CompanyAddress, string CompanyCity,
@@ -86,7 +93,13 @@ public static class InvoicePdf
         string? PreparedBy, string? Notes,
         IReadOnlyList<Line> Lines,
         // whoever wrote the order this invoice came from
-        string? Salesman = null);
+        string? Salesman = null,
+        /* Present only when this invoice has been through the Packing screen.
+           Appends one page after the ordinary invoice pages -- the bill itself
+           is never rewritten, because it is what the customer was actually
+           charged; this is the separate record of what physically went out. */
+        IReadOnlyList<DispatchLine>? DispatchManifest = null,
+        DateOnly? DispatchedOn = null);
 
     public static byte[] Render(Data d)
     {
@@ -98,6 +111,9 @@ public static class InvoicePdf
         const int laterPageRows = 22;
         var pages = Paginate(d.Lines, firstPageRows, laterPageRows);
 
+        var hasManifest = d.DispatchManifest is { Count: > 0 };
+        var pageCount = pages.Count + (hasManifest ? 1 : 0);
+
         for (var p = 0; p < pages.Count; p++)
         {
             if (p > 0) pdf.NewPage();
@@ -108,10 +124,105 @@ public static class InvoicePdf
             var last = p == pages.Count - 1;
             if (last) DrawTotals(pdf, d, y);
 
-            DrawFoot(pdf, d, p + 1, pages.Count);
+            DrawFoot(pdf, d, p + 1, pageCount);
+        }
+
+        if (hasManifest)
+        {
+            pdf.NewPage();
+            DrawDispatchPage(pdf, d);
+            DrawFoot(pdf, d, pageCount, pageCount);
         }
 
         return pdf.Build();
+    }
+
+    /* ─────────────────────── the dispatch record ─────────────────────── */
+
+    /// <summary>
+    /// One extra page: what was ordered against what actually left the shelf.
+    /// Drawn in the same palette and column rhythm as the invoice table so it
+    /// reads as part of the same document, not a pasted-in report.
+    /// </summary>
+    private static void DrawDispatchPage(PdfCanvas pdf, Data d)
+    {
+        var manifest = d.DispatchManifest!;
+        var anyShort = manifest.Any(m => m.Dispatched < m.Requested);
+
+        const double bandTop = PdfCanvas.A4Height;
+        const double bandHeight = 60;
+        var bandBottom = bandTop - bandHeight;
+
+        pdf.Rect(0, bandBottom, PdfCanvas.A4Width, bandHeight, Navy);
+        pdf.Rect(0, bandBottom - 5, PdfCanvas.A4Width, 5, Yellow);
+
+        pdf.Text(Left, bandBottom + 34, "DISPATCH RECORD", 15, White, bold: true);
+        pdf.Text(Left, bandBottom + 16, "Against invoice " + d.InvoiceNo, 9, OnNavy);
+        pdf.TextRight(Right, bandBottom + 34, Day(d.DispatchedOn ?? d.InvoiceDate), 10, Yellow, bold: true);
+        pdf.TextRight(Right, bandBottom + 16,
+            anyShort ? "SENT SHORT OF WHAT WAS ORDERED" : "SENT IN FULL", 9,
+            anyShort ? Yellow : OnNavy, bold: anyShort);
+
+        var y = bandBottom - 24;
+
+        /* The same idea as InvoicePdf's own table, moved left since there is
+           no rate or tax on this page -- only counts. */
+        const double colName = ColDesc;
+        const double colReq = 380;
+        const double colSent = 460;
+        const double colShort = Right;
+
+        const double headHeight = 21;
+        pdf.Rect(Left, y - headHeight, Right - Left, headHeight, NavySoft);
+        var ty = y - headHeight + 7;
+        pdf.TextCenter(ColNo, ty, "#", 7.5, White, bold: true);
+        pdf.Text(colName, ty, "ITEM", 7.5, White, bold: true);
+        pdf.TextRight(colReq, ty, "REQUESTED", 7.5, White, bold: true);
+        pdf.TextRight(colSent, ty, "DISPATCHED", 7.5, White, bold: true);
+        pdf.TextRight(colShort, ty, "SHORT BY", 7.5, White, bold: true);
+        y -= headHeight;
+
+        const double rowHeight = 25;
+        var n = 1;
+        var totalReq = 0;
+        var totalSent = 0;
+
+        foreach (var m in manifest)
+        {
+            var rowBottom = y - rowHeight;
+            var shortBy = m.Requested - m.Dispatched;
+            if (n % 2 == 0) pdf.Rect(Left, rowBottom, Right - Left, rowHeight, ZebraFill);
+
+            pdf.TextCenter(ColNo, rowBottom + 10, n.ToString(), 8, Faint);
+            var nameMax = colReq - colName - 20;
+            pdf.Text(colName, rowBottom + 14, pdf.Ellipsis(m.Name, 8.6, nameMax), 8.6, Ink);
+            pdf.Text(colName, rowBottom + 4, pdf.Ellipsis(m.Sku ?? "", 7.2, nameMax), 7.2, Faint);
+
+            pdf.TextRight(colReq, rowBottom + 10, m.Requested.ToString("N0", Pk), 8.6, Ink);
+            pdf.TextRight(colSent, rowBottom + 10, m.Dispatched.ToString("N0", Pk), 8.6, Ink, bold: true);
+            pdf.TextRight(colShort, rowBottom + 10, shortBy > 0 ? shortBy.ToString("N0", Pk) : "-", 8.6,
+                shortBy > 0 ? Danger : Faint, bold: shortBy > 0);
+
+            pdf.Line(Left, rowBottom, Right, rowBottom, Hair, 0.5);
+
+            totalReq += m.Requested;
+            totalSent += m.Dispatched;
+            y = rowBottom;
+            n++;
+        }
+
+        y -= 14;
+        pdf.TextRight(colReq, y, totalReq.ToString("N0", Pk), 9, Muted, bold: true);
+        pdf.TextRight(colSent, y, totalSent.ToString("N0", Pk), 9, Ink, bold: true);
+        if (totalReq > totalSent)
+            pdf.TextRight(colShort, y, (totalReq - totalSent).ToString("N0", Pk), 9, Danger, bold: true);
+
+        y -= 24;
+        pdf.Text(Left, y,
+            anyShort
+                ? "Some items were not on hand in full. The salesperson, the accountant and the Super Admin were notified when this was dispatched."
+                : "Every item on the invoice was dispatched in full.",
+            8, Muted);
     }
 
     private static List<List<Line>> Paginate(IReadOnlyList<Line> lines, int first, int rest)

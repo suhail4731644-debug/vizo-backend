@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -116,6 +117,7 @@ public class PartyDocumentsController : ApiControllerBase
             var images = new List<(string MimeType, byte[] Bytes)>();
             var named = new List<string>();
             var problems = new List<object>();
+            var fetched = new Dictionary<string, byte[]>();
 
             foreach (var (key, url) in wanted)
             {
@@ -129,7 +131,50 @@ public class PartyDocumentsController : ApiControllerBase
                 }
                 images.Add(("image/jpeg", bytes));
                 named.Add(key);
+                fetched[key] = bytes;
             }
+
+            /* THE SAME PICTURE IN BOTH SLOTS.
+
+               The owner's rule: front and back of a CNIC that are "very much
+               the same" are an error. The browser already refuses the obvious
+               case before uploading (a fingerprint comparison), but this
+               endpoint cannot assume the browser did -- and identical bytes are
+               the one case that needs no model and no guessing at all, so it is
+               settled here, for the CNIC and the card, without spending a call.
+               Hashing the JPEG Cloudinary hands back rather than the upload
+               means two copies of one file match even if they were uploaded
+               separately. */
+            var same = false;
+            foreach (var (front, back, what, explain) in new[]
+            {
+                ("cnicFront", "cnicBack", "CNIC",
+                    "The back is the side with the address -- turn the card over and take it."),
+                ("cardFront", "cardBack", "business card",
+                    "Take the other side, or mark the back as not available."),
+            })
+            {
+                if (fetched.TryGetValue(front, out var a) && fetched.TryGetValue(back, out var b)
+                    && SHA256.HashData(a).AsSpan().SequenceEqual(SHA256.HashData(b)))
+                {
+                    same = true;
+                    problems.Add(new
+                    {
+                        image = back,
+                        reason = "same-picture",
+                        message = $"The {what} front and back pictures are very much the same -- it is one picture twice. {explain}"
+                    });
+                }
+            }
+
+            if (same)
+                return Ok(new
+                {
+                    configured = true,
+                    problems,
+                    fields = (object?)null,
+                    message = "The front and back pictures are the same."
+                });
 
             if (images.Count == 0)
                 return Ok(new
@@ -149,7 +194,23 @@ public class PartyDocumentsController : ApiControllerBase
                 .Select(c => new { c.CityId, c.CityName })
                 .ToListAsync(ct);
 
-            var answer = await _ai.ReadImagesAsync(Prompt(named, cities.Select(c => Short(c.CityName))), images, ct);
+            /* THE READER NEVER HEARS THE WORDS "FRONT" AND "BACK".
+
+               It used to be told the pictures were cnicFront and cnicBack, and
+               it believed the labels: sides put in the wrong slots came back
+               "front" for the slot named front, whatever was on the card, and the
+               swap went unnoticed. The pictures go under neutral names now, the
+               reader says which side each one is from what is printed on it, and
+               the names are turned back into slots below. */
+            var neutral = new Dictionary<string, string>
+            {
+                ["cnicFront"] = "cnicPictureOne", ["cnicBack"] = "cnicPictureTwo",
+                ["cardFront"] = "cardPictureOne", ["cardBack"] = "cardPictureTwo",
+            };
+            var slotOf = neutral.ToDictionary(kv => kv.Value, kv => kv.Key);
+
+            var answer = await _ai.ReadImagesAsync(
+                Prompt(named.Select(n => neutral[n]).ToList(), cities.Select(c => Short(c.CityName))), images, ct);
 
             if (string.IsNullOrWhiteSpace(answer))
                 return Ok(new
@@ -160,7 +221,7 @@ public class PartyDocumentsController : ApiControllerBase
                     message = "The reader did not answer."
                 });
 
-            var shaped = Shape(answer!, cities.Select(c => (c.CityId, c.CityName)).ToList(), problems);
+            var shaped = Shape(answer!, cities.Select(c => (c.CityId, c.CityName)).ToList(), problems, slotOf);
             if (shaped is null)
             {
                 /* THE ANSWER WAS NOT JSON THIS COULD READ.
@@ -346,14 +407,16 @@ public class PartyDocumentsController : ApiControllerBase
     private static string Prompt(IReadOnlyList<string> images, IEnumerable<string> cities) =>
         "You are reading photographs of Pakistani business documents so that a shop account can be opened.\n" +
         "The images attached are, in order: " + string.Join(", ", images) + ".\n" +
-        "  cnicFront / cnicBack -- the shopkeeper's CNIC (national identity card)\n" +
-        "  cardFront / cardBack -- the SHOP's own business card\n\n" +
+        "  cnicPictureOne / cnicPictureTwo -- photographs of the shopkeeper's CNIC (national identity card)\n" +
+        "  cardPictureOne / cardPictureTwo -- photographs of the SHOP's own business card\n" +
+        "\"One\" and \"Two\" are only the order the pictures were sent in. They are NOT labelled front and back: " +
+        "either picture may be either side, and both may even be the same side. Decide from what is printed, never from the name.\n\n" +
         "READ ONLY WHAT IS PRINTED. Never guess a missing letter, never complete a name, never invent a number.\n" +
         "ENGLISH ONLY: a CNIC prints every field in Urdu as well. Ignore the Urdu completely -- do not transliterate it.\n" +
         "Skip placeholder text such as 'xyz'.\n\n" +
         "Answer with this JSON and nothing else:\n" +
         "{\n" +
-        "  \"images\": [ { \"name\": \"cnicFront\", \"readable\": true|false, \"reason\": \"blurred|glare|cropped|wrong-document|null\" } ],\n" +
+        "  \"images\": [ { \"name\": \"cnicPictureOne\", \"readable\": true|false, \"reason\": \"blurred|glare|cropped|wrong-document|null\", \"side\": \"front|back|unknown\" } ],\n" +
         "  \"cnicName\": \"the card holder's own name, WITHOUT the father's name\",\n" +
         "  \"fatherName\": \"\",\n" +
         "  \"cnicNumber\": \"00000-0000000-0\",\n" +
@@ -367,17 +430,23 @@ public class PartyDocumentsController : ApiControllerBase
         "  \"category\": \"RETAILER|WHOLESALER|AGENT\"\n" +
         "}\n\n" +
         "RULES:\n" +
+        "- \"side\" is for the two cnicPicture images only, and is about WHAT IS ON THE PICTURE. " +
+        "A CNIC's FRONT shows the holder's photograph, the name, father's name, gender and identity number. " +
+        "Its BACK shows the address, the barcode or QR code and the dates of issue and expiry. " +
+        "Say \"front\" or \"back\" only when you can see that, otherwise \"unknown\". Use \"unknown\" for every card picture.\n" +
         "- Phone numbers as printed, either 03XXXXXXXXX or +923XXXXXXXXX. The CNIC's numbers come first, then the card's.\n" +
         "- cnicCity must be one of these, or empty if none of them fits: " + string.Join(", ", cities) + "\n" +
         "- If a picture is too blurred, too bright or cut off to read, set readable:false with the reason AND leave the fields it would have filled empty.\n" +
         "- Use \"\" for anything you cannot see. Never use null inside a string field.\n" +
-        "- category is RETAILER unless the card clearly says wholesale or agency.";
+        "- category is RETAILER by default. Choose WHOLESALER only when the card says wholesale and does NOT also say retail, " +
+        "and AGENT only when it says agent, agency or distributor. A card that says \"Wholesale & Retail\" or \"Retail & Wholesale\" is RETAILER.";
 
     /// <summary>
     /// Turns the reader's JSON into the shape the form fills itself from --
     /// and applies the owner's rules about which field is built from what.
     /// </summary>
-    private object? Shape(string json, IReadOnlyList<(int CityId, string CityName)> cities, List<object> problems)
+    private object? Shape(string json, IReadOnlyList<(int CityId, string CityName)> cities, List<object> problems,
+        IReadOnlyDictionary<string, string> slotOf)
     {
         /* Models wrap JSON in ``` fences, prefix it with a sentence, or stop
            mid-string when they hit the token limit. Take the outermost braces
@@ -407,15 +476,26 @@ public class PartyDocumentsController : ApiControllerBase
 
         /* Which pictures the reader could not read. The screen turns each one
            into "that picture is not clear -- take it again". */
+        var flagged = new HashSet<string>();
+        var sides = new Dictionary<string, string>();
         if (root.TryGetProperty("images", out var imgs) && imgs.ValueKind == JsonValueKind.Array)
         {
             foreach (var img in imgs.EnumerateArray())
             {
                 var readable = !img.TryGetProperty("readable", out var r) || r.ValueKind != JsonValueKind.False;
-                if (readable) continue;
+                var said = img.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                /* Back to the slot the screen knows it by. */
+                var name = slotOf.TryGetValue(said, out var slot) ? slot : said;
 
-                var name = img.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                if (readable)
+                {
+                    if (img.TryGetProperty("side", out var sd) && sd.ValueKind == JsonValueKind.String)
+                        sides[name] = (sd.GetString() ?? "").Trim().ToLowerInvariant();
+                    continue;
+                }
+
                 var reason = img.TryGetProperty("reason", out var rs) ? rs.GetString() ?? "" : "";
+                flagged.Add(name);
                 problems.Add(new
                 {
                     image = name,
@@ -429,6 +509,44 @@ public class PartyDocumentsController : ApiControllerBase
                     }
                 });
             }
+        }
+
+        /* THE WRONG SIDE IN A SLOT.
+
+           A fingerprint (in the browser) and a byte comparison (above) catch a
+           picture used twice. Neither can tell that two DIFFERENT photographs
+           of the same face of the card were taken, or that the sides were put
+           in the wrong way round -- only reading what is printed can. So the
+           reader says which side each CNIC picture is, and a picture whose side
+           does not match its slot is refused with the slot's own name, which is
+           what sends the screen back to that tile. Left alone when the reader
+           said "unknown": a doubt is not an error. */
+        if (!flagged.Contains("cnicBack") && sides.TryGetValue("cnicBack", out var seenBack) && seenBack == "front")
+        {
+            flagged.Add("cnicBack");
+            problems.Add(new
+            {
+                image = "cnicBack",
+                reason = "wrong-side",
+                /* "Very much the same" is the owner's wording for two pictures of
+                   one side. When the sides are merely the wrong way round it would
+                   be untrue, so it is said only when both slots show the front. */
+                message = sides.TryGetValue("cnicFront", out var otherSide) && otherSide == "front"
+                    ? "That is the FRONT of the CNIC again -- the front and back pictures are very much the same. The back is the side with the address; turn the card over and take it."
+                    : "That is the FRONT of the CNIC. The back is the side with the address -- take the other side."
+            });
+        }
+        if (!flagged.Contains("cnicFront") && sides.TryGetValue("cnicFront", out var seenFront) && seenFront == "back")
+        {
+            flagged.Add("cnicFront");
+            problems.Add(new
+            {
+                image = "cnicFront",
+                reason = "wrong-side",
+                message = sides.TryGetValue("cnicBack", out var otherFace) && otherFace == "back"
+                    ? "That is the BACK of the CNIC again -- the front and back pictures are very much the same. The front is the side with the photograph and the name; take that side."
+                    : "That is the BACK of the CNIC. The front is the side with the photograph and the name -- take the other side."
+            });
         }
 
         var cnicName = Str("cnicName");

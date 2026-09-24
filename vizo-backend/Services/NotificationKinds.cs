@@ -28,6 +28,12 @@ public static class NotificationKinds
     public const string TransferReceived   = "TRANSFER_RECEIVED";
     public const string OrderPacked        = "ORDER_PACKED";
     public const string OrderDispatched    = "ORDER_DISPATCHED";
+    /// <summary>
+    /// The Packing screen sent less of something than the salesperson ordered.
+    /// Added 23 September; goes to the Super Admin, the accountant and the
+    /// salesperson who wrote the order, by the owner's own words.
+    /// </summary>
+    public const string DispatchShortage   = "DISPATCH_SHORTAGE";
     public const string OrderDelivered     = "ORDER_DELIVERED";
     public const string CodSettled         = "COD_SETTLED";
 
@@ -94,6 +100,7 @@ public static class NotificationKinds
         new(OrderConfirmed,     "Orders", "Order confirmed",      "The order department has accepted an order."),
         new(OrderPacked,        "Orders", "Order packed",         "An order is packed and ready to send."),
         new(OrderDispatched,    "Orders", "Order dispatched",     "An order has left with a courier."),
+        new(DispatchShortage,   "Orders", "Sent short",            "The order department sent less of something than was ordered.", Severe: true),
         new(OrderDelivered,     "Orders", "Order delivered",      "An order reached the customer."),
 
         new(CreditHold,         "Money",  "Credit limit crossed", "An order is stuck because the customer is over their limit.", Severe: true),

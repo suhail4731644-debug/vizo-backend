@@ -1,0 +1,46 @@
+23_undo_values.txt -- what "Product"."TaxRatePercent" was before migration 23 zeroed it.
+Taken from the live database on 2026-09-21, immediately before the change.
+38 products; to put any back:  UPDATE "Product" SET "TaxRatePercent" = <rate> WHERE "ProductId" = <id>;
+
+-- the whole set, as one script:
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 1;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 2;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 3;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 4;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 5;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 6;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 7;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 8;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 9;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 10;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 11;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 12;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 13;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 14;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 15;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 16;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 17;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 18;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 19;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 20;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 21;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 22;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 23;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 24;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 25;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 26;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 27;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 28;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 29;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 30;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 31;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 32;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 33;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 34;
+UPDATE "Product" SET "TaxRatePercent" = 10.00 WHERE "ProductId" = 35;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 36;
+UPDATE "Product" SET "TaxRatePercent" = 18.00 WHERE "ProductId" = 39;
+UPDATE "Product" SET "TaxRatePercent" = 10.00 WHERE "ProductId" = 40;
+
+-- the order department's rights before migration 23 (22):
+-- claims.receive, claims.settle, claims.view, cost.view, customers.manage, customers.view, delivery.manage, delivery.view, invoices.create, invoices.view, orders.approve, orders.create, orders.view, products.manage, purchases.view, receipts.stock, reports.view, sales.direct, stock.correct, stock.transfer, stock.view, visits.view

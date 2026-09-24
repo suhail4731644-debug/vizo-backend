@@ -136,26 +136,7 @@ public class GeminiClient
 
         try
         {
-            using var client = _http.CreateClient();
-            client.Timeout = TimeSpan.FromSeconds(TimeoutSeconds);
-
-            /* The key goes in a header, not the query string -- a URL ends up
-               in proxy logs and browser history in a way a header does not. */
-            var url = $"https://generativelanguage.googleapis.com/v1beta/models/{Model}:generateContent";
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            req.Headers.Add("x-goog-api-key", ApiKey);
-            req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-
-            using var res = await client.SendAsync(req, ct);
-            var raw = await res.Content.ReadAsStringAsync(ct);
-
-            if (!res.IsSuccessStatusCode)
-            {
-                _logger.LogWarning("Gemini returned {Status}: {Body}", (int)res.StatusCode, Trim(raw));
-                return null;
-            }
-
-            return ReadFirstText(raw);
+            return await PostAsync(JsonSerializer.Serialize(body), TimeSpan.FromSeconds(TimeoutSeconds), "text", ct);
         }
         catch (TaskCanceledException)
         {
@@ -239,54 +220,11 @@ public class GeminiClient
 
         try
         {
-            using var client = _http.CreateClient();
             /* Pictures are slower than text: a CNIC pair can take fifteen
                seconds on a bad line, and timing out at the usual thirty means
                the salesperson types it all in for nothing. */
-            client.Timeout = TimeSpan.FromSeconds(Math.Max(TimeoutSeconds, 60));
-
-            var payload = JsonSerializer.Serialize(body);
-
-            /* TWO GOES AT EACH MODEL, THEN THE NEXT MODEL.
-
-               A 429 or a 5xx means "busy, ask again"; a 400 or a 403 is our
-               fault or the key's and asking again would only be slower, so
-               those stop everything at once. A model that is 404 -- Google
-               retires these names faster than anybody redeploys -- moves
-               straight on to the next in the list. */
-            foreach (var model in Models)
-            {
-                var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
-
-                for (var attempt = 1; attempt <= 2; attempt++)
-                {
-                    using var req = new HttpRequestMessage(HttpMethod.Post, url);
-                    req.Headers.Add("x-goog-api-key", ApiKey);
-                    req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
-
-                    using var res = await client.SendAsync(req, ct);
-                    var raw = await res.Content.ReadAsStringAsync(ct);
-
-                    if (res.IsSuccessStatusCode)
-                    {
-                        if (!string.Equals(model, Model, StringComparison.OrdinalIgnoreCase))
-                            _logger.LogInformation("Gemini vision answered on the fallback model {Model}.", model);
-                        return ReadFirstText(raw);
-                    }
-
-                    var status = (int)res.StatusCode;
-                    _logger.LogWarning("Gemini vision {Model} returned {Status} (attempt {Attempt}): {Body}",
-                        model, status, attempt, Trim(raw));
-
-                    if (status is 400 or 401 or 403) return null;    // ours to fix, not theirs
-                    if (status == 404) break;                        // this name is gone; try the next
-                    if (attempt == 2) break;                         // busy twice; try the next model
-                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
-                }
-            }
-
-            _logger.LogWarning("Gemini vision: every model was busy or missing.");
-            return null;
+            return await PostAsync(JsonSerializer.Serialize(body),
+                TimeSpan.FromSeconds(Math.Max(TimeoutSeconds, 60)), "vision", ct);
         }
         catch (TaskCanceledException)
         {
@@ -298,6 +236,68 @@ public class GeminiClient
             _logger.LogWarning(ex, "Gemini vision call failed.");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Sends one request to Gemini and gets an answer out of SOME model, or null.
+    /// Shared by the text explanations and the document reader.
+    ///
+    /// It used to live only in the document reader. Every AI REPORT -- the sales
+    /// drop, who to chase for money, dead stock, customers at risk, the demand
+    /// forecast, margin watch, the month-end summary, "ask a question" and the
+    /// nightly insight -- made ONE attempt on ONE model, so the first time
+    /// gemini-flash-latest said "busy" or "quota exceeded" all of them went
+    /// silent at once: aiAvailable true, explanation null, no error anywhere the
+    /// user could see. Found by testing all of them in a row and watching every
+    /// one come back empty in half a second.
+    ///
+    /// TWO GOES AT EACH MODEL, THEN THE NEXT MODEL:
+    ///   400 / 401 / 403  ours to fix or the key's -- stop, asking again is only slower
+    ///   404              Google retired that name -- next model
+    ///   429              over its quota. Waiting a second will not refill a daily
+    ///                    allowance -- next model at once
+    ///   5xx              "high demand" -- once more after a second, then next model
+    /// The key goes in a header, not the query string: a URL ends up in proxy logs
+    /// and browser history in a way a header does not.
+    /// </summary>
+    private async Task<string?> PostAsync(string payload, TimeSpan timeout, string what, CancellationToken ct)
+    {
+        using var client = _http.CreateClient();
+        client.Timeout = timeout;
+
+        foreach (var model in Models)
+        {
+            var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
+
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Post, url);
+                req.Headers.Add("x-goog-api-key", ApiKey);
+                req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+
+                using var res = await client.SendAsync(req, ct);
+                var raw = await res.Content.ReadAsStringAsync(ct);
+
+                if (res.IsSuccessStatusCode)
+                {
+                    if (!string.Equals(model, Model, StringComparison.OrdinalIgnoreCase))
+                        _logger.LogInformation("Gemini {What} answered on the fallback model {Model}.", what, model);
+                    return ReadFirstText(raw);
+                }
+
+                var status = (int)res.StatusCode;
+                _logger.LogWarning("Gemini {What} {Model} returned {Status} (attempt {Attempt}): {Body}",
+                    what, model, status, attempt, Trim(raw));
+
+                if (status is 400 or 401 or 403) return null;    // ours to fix, not theirs
+                if (status is 404 or 429) break;                 // gone, or out of quota: the next model
+                if (attempt == 2) break;                         // busy twice: the next model
+                await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            }
+        }
+
+        _logger.LogWarning("Gemini {What}: every model was busy, over its quota or missing.", what);
+        return null;
     }
 
     /// <summary>

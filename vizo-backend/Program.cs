@@ -145,13 +145,13 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("OrderDept", p => p.RequireRole("order-dept", "super-admin"));
     options.AddPolicy("Sales", p => p.RequireRole("sales", "super-admin"));
     options.AddPolicy("Staff", p => p.RequireRole(
-        "super-admin", "accountant", "order-dept", "sales", "warehouse-keeper"));
+        "super-admin", "accountant", "order-dept", "sales"));
 
     /* Purchases, Inventory, Delivery, Claims and the supplier side of Parties:
        everyone except a sales rep. Mirrors ROUTE_RULES in the front end's
        src/proxy.ts so a screen the proxy allows is a screen the API allows. */
     options.AddPolicy("BackOffice", p => p.RequireRole(
-        "super-admin", "accountant", "order-dept", "warehouse-keeper"));
+        "super-admin", "accountant", "order-dept"));
 });
 
 /* Policies named "perm:something" are built on demand from the holder's

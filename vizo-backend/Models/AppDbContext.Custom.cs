@@ -288,6 +288,14 @@ public partial class AppDbContext
                 .HasConstraintName("fk_party_created_by");
         });
 
+        modelBuilder.Entity<SalesOrderItem>(entity =>
+        {
+            /* What actually left the shelf for this line, once the order is
+               dispatched. See Models/SalesOrderItem.Custom.cs and
+               database/25_packing_and_claims_removed.sql. */
+            entity.Property(e => e.DispatchedQty);
+        });
+
         modelBuilder.Entity<JournalEntry>(entity =>
         {
             /* A reversed entry stays POSTED and points at the entry that undid

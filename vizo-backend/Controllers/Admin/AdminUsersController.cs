@@ -436,18 +436,17 @@ public class AdminUsersController : AdminControllerBase
        "if warehouse account of muhammadzain will be created then it will be
         asked which warehouse -- either Lahore-Warehouse or Karachi-Warehouse"
 
-       Two roles are tied to a PLACE rather than to the company as a whole:
+       ONE role is tied to a PLACE rather than to the company as a whole:
 
-         warehouse-keeper  picks stock off a particular shelf, in a particular
-                           city. "The warehouse" stopped being a meaningful
-                           phrase the moment there were two.
-         order-dept        packs and dispatches out of a particular order desk,
-                           which is the desk in the same city as that warehouse.
+         order-dept        packs and dispatches out of a particular order desk.
 
-       Neither had any such tie. /admin/users would create a keeper with no
-       location, or three, or with the Claim Stock shelf -- and the queue then
-       showed them every order in the company, which is exactly the report that
-       came back.
+       The warehouse-keeper role this was written for no longer exists (this
+       session) -- warehouse LOCATIONS remain, for transfers and for stock to
+       sit at, but nobody signs in as "the warehouse" any more. The rule below
+       is unchanged for order-dept, which had the same problem: /admin/users
+       would create a clerk with no location, or three, or with the Claim Stock
+       shelf -- and the queue then showed them every order in the company,
+       which is exactly the report that came back.
 
        EXACTLY ONE, AND OF THE RIGHT KIND. Not "at least one": a keeper who
        belongs to two warehouses is a keeper whose queue is ambiguous, and the
@@ -470,7 +469,6 @@ public class AdminUsersController : AdminControllerBase
     private static readonly IReadOnlyDictionary<string, (string KindKey, string Noun)> PlaceBoundRoles =
         new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase)
         {
-            ["warehouse-keeper"] = ("warehouse", "warehouse"),
             ["order-dept"] = ("department", "order department"),
         };
 

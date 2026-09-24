@@ -9,8 +9,17 @@ using vizo_backend.Services;
 namespace vizo_backend.Controllers;
 
 /// <summary>
-/// The /purchases screens: purchase orders, goods receipts, purchase invoices
-/// and purchase returns.
+/// The /purchases screens: purchase orders, goods receipts and purchase
+/// invoices.
+///
+/// PURCHASE RETURNS ARE GONE (this session) -- the owner's instruction was to
+/// remove the scenario entirely while sales returns stay. Nothing here creates
+/// or lists one any more. The nine that were made before this are left exactly
+/// as they were: "PurchaseReturn" and "PurchaseReturnItem" still hold the rows,
+/// ProductHistoryController still folds them into a product's ledger, and
+/// DocumentsController can still print or share the PDF of one that already
+/// exists. Only the ability to make a new one, and the screen to browse them by
+/// name, are removed.
 ///
 /// The inbound chain is PO -> GRN -> PI, and the three are deliberately
 /// separate things people conflate:
@@ -30,6 +39,15 @@ namespace vizo_backend.Controllers;
 /// </summary>
 [Route("api/purchases")]
 [ApiController]
+/* NOT THE ORDER DESK'S. The owner: "order department cannot access any
+   purchases page ... order department can never see purchases".
+
+   By ROLE rather than by a permission, on purpose: "never" is a statement about
+   the job, and a permission can be ticked in Setup. This is ANDed with the
+   BackOffice policy above, so nothing that worked for the accountant or the
+   Super Admin changes. The route guard in the web app's proxy.ts says the
+   same thing. */
+[Authorize(Roles = "super-admin,accountant")]
 [Authorize(Policy = "BackOffice")]
 public class PurchasesController : ApiControllerBase
 {
@@ -140,6 +158,7 @@ public class PurchasesController : ApiControllerBase
                         lineNo = i.LineNo,
                         productId = i.ProductId,
                         sku = i.Product.Sku,
+                        imageUrl = i.Product.ImageUrl,
                         name = i.Product.ProductName,
                         packing = i.Product.Packing,
                         qty = i.Quantity,
@@ -359,6 +378,7 @@ public class PurchasesController : ApiControllerBase
                         lineNo = i.LineNo,
                         productId = i.ProductId,
                         sku = i.Product.Sku,
+                        imageUrl = i.Product.ImageUrl,
                         name = i.Product.ProductName,
                         qtyReceived = i.QtyReceived,
                         qtyDamaged = i.QtyDamaged,
@@ -488,6 +508,7 @@ public class PurchasesController : ApiControllerBase
                         lineNo = l.LineNo,
                         productId = l.ProductId,
                         sku = l.Product.Sku,
+                        imageUrl = l.Product.ImageUrl,
                         name = l.Product.ProductName,
                         qty = l.Quantity,
                         unitCost = l.UnitCost,
@@ -574,112 +595,6 @@ public class PurchasesController : ApiControllerBase
     }
 
     // ══════════════════════════════════════════════════════════════════
-    //  PURCHASE RETURNS
-    // ══════════════════════════════════════════════════════════════════
-
-    [HttpGet("returns")]
-    public async Task<IActionResult> GetPurchaseReturns([FromQuery] string? q, [FromQuery] string? status)
-    {
-        try
-        {
-            var rows = _db.PurchaseReturns.AsNoTracking().AsQueryable();
-
-            if (!string.IsNullOrWhiteSpace(status)) rows = rows.Where(r => r.Status.StatusKey == status);
-            if (!string.IsNullOrWhiteSpace(q))
-            {
-                var term = q.Trim().ToLower();
-                rows = rows.Where(r => r.ReturnNo.ToLower().Contains(term) ||
-                                       (r.SupplierUser.DisplayName ?? r.SupplierUser.LegalName).ToLower().Contains(term));
-            }
-
-            var items = await rows
-                .OrderByDescending(r => r.ReturnDate).ThenByDescending(r => r.PrId)
-                .Select(r => new
-                {
-                    id = r.PrId,
-                    returnNo = r.ReturnNo,
-                    piId = r.PiId,
-                    invoiceNo = r.Pi.InvoiceNo,
-                    supplierId = r.SupplierUserId,
-                    supplierName = (r.SupplierUser.DisplayName ?? r.SupplierUser.LegalName),
-                    location = r.Location.LocationName,
-                    returnDate = r.ReturnDate,
-                    reason = r.Reason,
-                    status = r.Status.StatusKey,
-                    statusName = r.Status.StatusName,
-                    createdBy = r.CreatedByUser.User.FullName,
-                    itemCount = r.PurchaseReturnItems.Count,
-                    totalAmount = r.PurchaseReturnItems.Sum(l => (decimal?)(l.Quantity * l.UnitCost)) ?? 0m
-                })
-                .ToListAsync();
-
-            return Ok(items.Select(r => new
-            {
-                r.id, r.returnNo, r.piId, r.invoiceNo, r.supplierId, r.supplierName,
-                supplierInitials = Initials(r.supplierName),
-                r.location, r.returnDate, r.reason, r.status, r.statusName,
-                r.createdBy, r.itemCount, r.totalAmount
-            }));
-        }
-        catch (Exception ex)
-        {
-            return Fail(ex, "load the purchase-returns list");
-        }
-    }
-
-    [HttpGet("returns/{id:int}")]
-    public async Task<IActionResult> GetPurchaseReturn(int id)
-    {
-        try
-        {
-            var r = await _db.PurchaseReturns.AsNoTracking()
-                .Where(x => x.PrId == id)
-                .Select(x => new
-                {
-                    id = x.PrId,
-                    returnNo = x.ReturnNo,
-                    piId = x.PiId,
-                    invoiceNo = x.Pi.InvoiceNo,
-                    supplierId = x.SupplierUserId,
-                    supplierName = (x.SupplierUser.DisplayName ?? x.SupplierUser.LegalName),
-                    location = x.Location.LocationName,
-                    returnDate = x.ReturnDate,
-                    reason = x.Reason,
-                    status = x.Status.StatusKey,
-                    statusName = x.Status.StatusName,
-                    createdBy = x.CreatedByUser.User.FullName,
-                    lines = x.PurchaseReturnItems.OrderBy(l => l.LineNo).Select(l => new
-                    {
-                        id = l.PrItemId,
-                        lineNo = l.LineNo,
-                        productId = l.ProductId,
-                        sku = l.Product.Sku,
-                        name = l.Product.ProductName,
-                        qty = l.Quantity,
-                        unitCost = l.UnitCost,
-                        lineTotal = l.Quantity * l.UnitCost
-                    }).ToList()
-                })
-                .FirstOrDefaultAsync();
-
-            if (r is null) return NotFound(new { message = $"No purchase return with id {id}." });
-
-            return Ok(new
-            {
-                r.id, r.returnNo, r.piId, r.invoiceNo, r.supplierId, r.supplierName,
-                supplierInitials = Initials(r.supplierName),
-                r.location, r.returnDate, r.reason, r.status, r.statusName, r.createdBy,
-                totalAmount = r.lines.Sum(l => l.lineTotal),
-                r.lines
-            });
-        }
-        catch (Exception ex)
-        {
-            return Fail(ex, $"load purchase return {id}");
-        }
-    }
-
-    // ══════════════════════════════════════════════════════════════════
     //  LOOKUPS
     // ══════════════════════════════════════════════════════════════════
 
@@ -716,7 +631,7 @@ public class PurchasesController : ApiControllerBase
                     .Where(p => p.IsActive).OrderBy(p => p.ProductName)
                     .Select(p => new
                     {
-                        id = p.ProductId, sku = p.Sku, name = p.ProductName,
+                        id = p.ProductId, sku = p.Sku, name = p.ProductName, imageUrl = p.ImageUrl,
                         costPrice = p.CostPrice, packing = p.Packing,
                         taxRatePercent = p.TaxRatePercent
                     })
@@ -1119,118 +1034,6 @@ public class PurchasesController : ApiControllerBase
         }
     }
 
-    /// <summary>Sends goods back to a supplier and takes them off the shelf.</summary>
-    [HttpPost("returns")]
-    public async Task<IActionResult> CreatePurchaseReturn([FromBody] PrRequest body)
-    {
-        try
-        {
-            if (body.Lines is null || body.Lines.Count == 0)
-                return BadRequest(new { message = "A purchase return needs at least one line." });
-            if (string.IsNullOrWhiteSpace(body.Reason))
-                return BadRequest(new { message = "A reason is required." });
-
-            var pi = await _db.PurchaseInvoices.FirstOrDefaultAsync(p => p.PiId == body.PiId);
-            if (pi is null) return BadRequest(new { message = "Pick a valid purchase invoice." });
-            if (!await _db.Locations.AnyAsync(l => l.LocationId == body.LocationId))
-                return BadRequest(new { message = "Pick a valid location." });
-
-            var me = await CurrentEmployeeId();
-            if (me is null) return BadRequest(new { message = "Only a staff account can raise a purchase return." });
-
-            var status = await _db.ReturnStatuses.FirstOrDefaultAsync(s => s.StatusKey == "DRAFT");
-            if (status is null) return BadRequest(new { message = "Return statuses are not configured." });
-
-            var issue = await _db.MovementTypes.FirstOrDefaultAsync(m => m.TypeKey == "PURCHASE_RETURN")
-                        ?? await _db.MovementTypes.FirstOrDefaultAsync(m => m.TypeKey == "ISSUE");
-
-            await using var tx = await _db.Database.BeginTransactionAsync();
-
-            var pr = new PurchaseReturn
-            {
-                ReturnNo = await NextNumber("PR"),
-                PiId = body.PiId,
-                SupplierUserId = pi.SupplierUserId,
-                LocationId = body.LocationId,
-                ReturnDate = body.ReturnDate ?? Today(),
-                Reason = body.Reason.Trim(),
-                StatusId = status.StatusId,
-                CreatedByUserId = me.Value
-            };
-            _db.PurchaseReturns.Add(pr);
-            await _db.SaveChangesAsync();
-
-            short n = 1;
-            foreach (var l in body.Lines)
-            {
-                if (l.Qty <= 0)
-                    return BadRequest(new { message = "Every line needs a quantity above zero." });
-
-                _db.PurchaseReturnItems.Add(new PurchaseReturnItem
-                {
-                    PrId = pr.PrId,
-                    LineNo = n++,
-                    ProductId = l.ProductId,
-                    Quantity = l.Qty,
-                    UnitCost = l.UnitCost
-                });
-
-                var bal = await _db.StockBalances
-                    .FirstOrDefaultAsync(s => s.ProductId == l.ProductId && s.LocationId == body.LocationId);
-                if (bal is null || bal.Quantity < l.Qty)
-                    return BadRequest(new
-                    {
-                        message = $"Cannot return {l.Qty} of product {l.ProductId} -- only {bal?.Quantity ?? 0} on hand."
-                    });
-
-                bal.Quantity -= l.Qty;
-                if (issue is not null)
-                {
-                    _db.StockMovements.Add(new StockMovement
-                    {
-                        ProductId = l.ProductId,
-                        LocationId = body.LocationId,
-                        MovementTypeId = issue.MovementTypeId,
-                        MovedAt = Now(),
-                        ReferenceNo = pr.ReturnNo,
-                        Quantity = -l.Qty,
-                        BalanceAfter = bal.Quantity,
-                        UserId = CurrentUserId()
-                    });
-                }
-            }
-            await _db.SaveChangesAsync();
-            await tx.CommitAsync();
-
-            await Log("PR_CREATED", "PurchaseReturn", pr.ReturnNo, body.Reason, 2);
-            /* The PDF exists the moment the document does. Print and Download
-               then hand out the stored Cloudinary file rather than rendering a
-               fresh one, so what is on screen is what is in the store. A
-               failure here is logged and swallowed -- the document is saved
-               either way and the PDF can be rebuilt from the row. */
-            await DocumentArchive.TryStoreForAsync(_db, _cfg, _logger, "purchase-return", pr.PrId, CurrentUserId());
-
-            /* -- D5 -- */
-            await _push.NotifyRolesAsync(
-                new[] { "super-admin", "accountant" },
-                NotificationKinds.PurchaseReturn,
-                $"Return to supplier by {CurrentUserName()}",
-                /* PurchaseReturn carries no total -- the value lives on its
-                   lines. Say what the row actually knows rather than compute a
-                   figure here that the return screen might disagree with. */
-                $"{pr.ReturnNo} -- {body.Lines.Count} " +
-                $"{(body.Lines.Count == 1 ? "line" : "lines")} going back. {pr.Reason}",
-                url: $"/purchases/returns/{pr.PrId}",
-                exceptUserId: CurrentUserId());
-
-            return Ok(new { id = pr.PrId, returnNo = pr.ReturnNo, message = $"Purchase return {pr.ReturnNo} saved." });
-        }
-        catch (Exception ex)
-        {
-            return Fail(ex, "save the purchase return");
-        }
-    }
-
     // ════════════════════════ validation helper ════════════════════════
 
     private async Task<string?> ValidateLines(List<PurchaseLineRequest>? lines, int supplierId, int? locationId)
@@ -1275,9 +1078,6 @@ public class PurchasesController : ApiControllerBase
         decimal Discount, decimal WhtAmount, int MethodId,
         List<PurchaseLineRequest> Lines);
 
-    public record PrRequest(
-        int PiId, int LocationId, DateOnly? ReturnDate, string Reason,
-        List<PurchaseLineRequest> Lines);
 
     // ══════════════════════════════════════════════════════════════════
     //  EXPORT

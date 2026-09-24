@@ -1639,3 +1639,170 @@
  answers configured:false and the new-customer screen asks for the details to
  be typed in. Photographs still upload and customers still save.
 
+
+═══════════════════════════════════════════════════════════════════════════════
+ 21 SEP, LATER — WHAT TESTING FOUND, AND WHAT WAS DONE ABOUT IT
+═══════════════════════════════════════════════════════════════════════════════
+
+ Three things were broken and are fixed; the rest is for you to know.
+
+ 1. EVERY AI REPORT WENT SILENT THE FIRST TIME GEMINI SAID "BUSY".
+    Services/GeminiClient.ExplainAsync -- behind the sales-drop explanation, who
+    to chase for money, dead stock, customers at risk, the demand forecast, margin
+    watch, the month-end summary, "ask a question" and the nightly insight -- made
+    ONE attempt on ONE model. The retry-and-fall-back-to-the-next-model loop had
+    been written for the document reader only, last time. So when
+    gemini-flash-latest answered 429 or 503, every report came back with
+    aiAvailable:true and explanation:null in half a second, and no error anywhere.
+    Found by running all of them in a row. The loop is now ONE private method
+    (PostAsync) used by both, and a 429 (out of quota) moves straight to the next
+    model instead of waiting a second on one that will not answer until tomorrow.
+    The nightly insight goes through the same method; it runs at its own hour, so
+    it was proved by sharing the code path rather than by watching it run.
+
+ 2. THE CUSTOMER SCREEN NEVER RECEIVED THE CUSTOMER'S DOCUMENTS.
+    PartiesController.Get built a "documents" block (the six picture links and the
+    PDF) and then left it out of the object it returned. So the "Legal documents"
+    button on the customer's screen never appeared for anybody, and the edit
+    screen showed six empty tiles for a customer who had six pictures on file. The
+    PDF itself was fine and the database held every link -- the last hop dropped
+    them. One word. Both now work; checked against a real customer.
+
+ 3. THE CUSTOMER'S SCREEN HEADED WITH THE LEGAL NAME.
+    Your rule was that the Display Name is what the whole project shows. The
+    customer's own page still led with the legal name. It leads with the display
+    name now, and the legal name sits under it when it differs.
+
+ THE FRONT / BACK CHECK, and how far it goes:
+
+    Three layers, cheapest first, because each catches what the one before cannot.
+      a) In the browser, before anything is uploaded: a fingerprint of the picture
+         (lib/image-hash.ts) compared with the other side. The SAME FILE, and a
+         second photograph of the same face, are refused with "the front and back
+         pictures are very much the same". Nothing is uploaded for a refused one.
+      b) On the API, for byte-identical files: no AI call is spent on it.
+      c) On the API, by the AI: it reads WHICH face of the CNIC each picture is
+         (photograph and name = front; address and barcode = back), and refuses a
+         picture in the wrong slot -- including the sides swapped.
+    The AI is told the pictures by neutral names, "cnicPictureOne" and "Two". It
+    used to be told "cnicFront" and "cnicBack" and simply believed the labels, so
+    swapped sides sailed through. That was found by testing exactly that case.
+
+    THE THRESHOLDS WERE MEASURED, NOT GUESSED, and are different per document
+    (lib/image-hash.ts explains the figures). The reason to know: two different
+    pages of a typed affidavit are already only 10 bits of 64 apart, so a single
+    strict number would have refused a perfectly good page 2. The affidavit is
+    only caught if it is the same file (or very nearly); the CNIC is caught at 15.
+
+ SMALLER THINGS:
+
+    - A section of the customer papers is now complete once ANY side is in. It
+      needed every side, which contradicted the card's own hint ("skip it if it is
+      blank") and your brief that partial sets are fine.
+    - The reader now defaults the category to RETAILER unless the card says
+      wholesale WITHOUT also saying retail. A card reading "Wholesale & Retail" had
+      been coming back Wholesaler.
+    - On the order screen a product with NO cost keeps its catalogue price and is
+      not margin-capped. There is one such product. Give it a cost and it is.
+
+ STILL YOURS TO KNOW, NOT CHANGED:
+
+    - The tax box is still there on Sale Invoices (new), Counter Sale and the order
+      EDIT screen, and the staff can type 18 into it. Tax now STARTS at 0 because
+      the products say 0; nothing stops a person typing a rate. You asked for the
+      default, so that is what changed.
+    - Only 3 of 36 active products have a picture. See changa.txt D6.
+    - The purchases screens (still there, for you and the accountant) link each
+      product to its Item screen. Untouched: the order desk cannot reach them.
+    - GET /inventory/categories and /brands answer 403 to the Accountant and the
+      Warehouse Keeper now. Their menus never showed either.
+    - The two test PDFs and 46 test pictures were deleted from Cloudinary. Thirteen
+      OTHER pictures in advpos/images/customer-documents (business_front_*,
+      cnic-front_* and so on) are not mine and were left alone.
+
+═══════════════════════════════════════════════════════════════════════════════
+ 22 SEP, LATER — WAREHOUSE ROLE AND PURCHASE RETURNS REMOVED: WHAT ELSE MOVED
+═══════════════════════════════════════════════════════════════════════════════
+
+ Two mechanical fixes that fell out of the removal itself, not asked for:
+
+ 1. TWO MOCK DATA FILES WOULD NOT COMPILE ONCE THE ROLE WAS GONE.
+    data/mock.ts's demoUsers and data/settings.ts's rolePermissions are both
+    typed Record<RoleKey, ...>, so removing "warehouse-keeper" from the RoleKey
+    union broke both at compile time. Neither is read by a live screen (checked:
+    only shortcut-sheet.tsx and order-delivery-card.tsx import from
+    data/settings.ts, and neither touches roles or permissions) -- they are
+    legacy demo/reference data, per AGENTS.md's own description of that file.
+    Both had their warehouse-keeper entry deleted so the build passes; nothing
+    else in either file was touched.
+
+ 2. A DEAD PERMISSION-CATALOGUE ROW. data/settings.ts also listed
+    "orders.warehouse" in a decorative permissionCatalog array that nothing
+    imports. Removed alongside the permission itself for consistency, same
+    reasoning as above.
+
+ WHAT WAS DELIBERATELY LEFT ALONE:
+
+    - backend/database/02_seed.sql and 15_order_workflow.sql still show the
+      role being created. They are historical record of what was actually run
+      and are never re-applied -- migration 24 is the record of what undid it.
+    - PurchaseReturn / PurchaseReturnItem models, AppDbContext's mapping of
+      them, and everywhere they are READ (ProductHistoryController's stock
+      ledger, DocumentBuilder's PDF, NotificationKinds.PurchaseReturn) are
+      untouched. See changa.txt E2 for why: nine real historical returns exist
+      and dropping that would touch real accounting history, which is the
+      owner's call, not a side effect of a role/panel removal.
+    - AppDbContext.cs itself (Talha's file, by the standing rule) was not
+      opened at all for either change -- neither removal needed a DbSet or a
+      Fluent mapping touched.
+
+═══════════════════════════════════════════════════════════════════════════════
+ 23 SEP, LATER — PACKING SCREEN: WHAT WAS BUILT ON RATHER THAN REPLACED
+═══════════════════════════════════════════════════════════════════════════════
+
+ Two things worth flagging about how the dispatch action itself changed.
+
+ 1. INVOICED -> DISPATCHED IS NOW A DIRECT MOVE for the order desk and the
+    accountant (OrderWorkflow.Moves), where it used to require the
+    Invoiced -> AtOrderDept step first. The Packing screen's flow has no
+    "I am now working on this" click in the middle, and asking for one would
+    only be a screen nobody presses before doing the real thing. AtOrderDept
+    is still a legal status an order can sit at and the order detail page's
+    dropdown still offers it -- nothing that already used it breaks. The one
+    side effect: with two legal next moves from Invoiced (AtOrderDept and
+    Dispatched), OrderWorkflow.NextFor no longer offers a single one-click
+    "next step" button on the order detail page for that transition; the
+    dropdown still has both. The Packing screen is the intended way to reach
+    Dispatched now, and the one-click button was never built for it.
+
+ 2. THE INVOICE PDF'S OLD FILE IS NOW DESTROYED ON A DISPATCH REBUILD
+    (PdfStore.DestroyAsync), which is the ONE exception to a rule stated
+    plainly elsewhere in this codebase: DocumentArchive never deletes an old
+    file, because a link somebody was already sent must keep working. This
+    is safe here specifically because nobody would have been sent the PRE-
+    dispatch link on its own -- it only ever travelled attached to the
+    invoice row it replaces, and the row is updated in the same breath. If a
+    future document kind ever wants the same treatment, read that reasoning
+    in PdfStore.cs first; it is not the default for a reason.
+
+ SMALLER THINGS:
+
+    - "Sales Drop-down: names of all individuals assigned to the sales role"
+      is read literally: a ready order's credited SalesPersonUserId is
+      usually a rep but not always (an order keyed in on somebody's behalf
+      still carries who typed it in) -- found live, two of your current ready
+      orders are credited to the Super Admin and one to an order-dept clerk.
+      Those orders still show up in the Order box and their customer still
+      appears in the Customer box; only the Salesperson box itself is
+      narrowed to genuine sales-role people.
+    - A shop can have ready orders from more than one rep at once (Cellular
+      World KHI does, right now, from two). Picking that customer first
+      leaves the salesperson box open rather than guessing -- the order list
+      still shows every one of that customer's ready orders regardless of
+      who wrote them.
+    - The "dedicated tracking page" the request asked for is /delivery,
+      unchanged -- it already lists every dispatch by status, including the
+      one this screen's courier step just booked. A second, separate page
+      would only ever say the same thing from a different query and drift
+      from it over time. "Delivered" is that same page with the status
+      pre-set in the URL.

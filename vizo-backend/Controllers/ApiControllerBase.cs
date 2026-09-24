@@ -117,7 +117,7 @@ public abstract class ApiControllerBase : ControllerBase
     /// </summary>
     /// <summary>
     /// The signed-in person's role key -- "super-admin", "sales",
-    /// "order-dept", "accountant", "warehouse-keeper".
+    /// "order-dept", "accountant".
     ///
     /// From the JWT, which already carries it. Every rule about who may do what
     /// to an order is decided from this.

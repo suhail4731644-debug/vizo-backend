@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using vizo_backend.Models;
@@ -7,13 +7,32 @@ using vizo_backend.Services;
 namespace vizo_backend.Controllers;
 
 /// <summary>
-/// The /packing bench -- the Order Department's queue of orders to pick and box.
+/// The /packing screen -- the Order Department's own home page since
+/// 23 September, and the front door of dispatching an order.
 ///
-/// An order arrives here once it is CONFIRMED or PROCESSING and leaves as
-/// PACKED, at which point it shows up on /dispatch. Orders sitting at
-/// CREDIT_HOLD deliberately never appear: the owner has not released them yet
-/// and packing stock against an unapproved order is exactly what the credit
-/// control is there to prevent.
+/// This controller used to hold the pre-chain "pick and box" queue: an order
+/// arrived PACKED and moved to /dispatch. That screen and its PACKED status
+/// were retired on 22 September (migration 21) -- stock now leaves at
+/// DISPATCHED, from the place the order screen asks for, and there is nothing
+/// left of the old queue worth keeping.
+///
+/// WHAT REPLACED IT is not a queue at all. The owner's brief: three dropdowns
+/// -- salesperson, customer, order -- that narrow each other down and can be
+/// filled in from any direction, an order's items shown with their pictures
+/// and the Super Admin's own selling price (never the margin a rep may have
+/// added), and a quantity the order desk may reduce but never raise. THIS
+/// controller only READS that -- salespeople, customers and orders ready to
+/// pack, and one order's own detail. The actual dispatch -- moving stock,
+/// writing DispatchedQty, rebuilding the invoice's PDF, warning of a shortage
+/// -- is the same PATCH /sales/orders/{id}/status the order detail page has
+/// always used, extended to accept the quantities this screen lets the order
+/// desk adjust (SalesController.SetOrderStatus). One action that changes an
+/// order's status belongs in one place.
+///
+/// "READY TO PACK" means the order sits at INVOICED or AT_ORDER_DEPT. Both are
+/// offered, on purpose: OrderWorkflow now lets the order desk dispatch straight
+/// from either one, so there is no long "take up the order" click this screen
+/// would otherwise be missing.
 ///
 /// Controller-only by design: no DTOs, no services, no interfaces, no
 /// repositories. Every action is wrapped in try/catch and reports via Fail().
@@ -23,265 +42,214 @@ namespace vizo_backend.Controllers;
 [Authorize(Policy = "OrderDept")]
 public class PackingController : ApiControllerBase
 {
-    private readonly PushNotificationService _push;
-
     public PackingController(AppDbContext db, IConfiguration cfg,
-        ILogger<PackingController> logger, IWebHostEnvironment env,
-        PushNotificationService push)
-        : base(db, cfg, logger, env) => _push = push;
+        ILogger<PackingController> logger, IWebHostEnvironment env)
+        : base(db, cfg, logger, env)
+    {
+    }
 
-    /* ═══════════════════════════════════════════════════════════════════
-       THIS SCREEN IS RETIRED -- 22 September 2026.
-
-       It was the pre-chain way of working: a queue of confirmed orders, a
-       Pack button that took the stock off the shelf and a PACKED status that
-       sat off to one side of the ten-step chain built on 3 September. The two
-       never met, which is why stock left the building through this screen and
-       through nowhere else -- an order could be invoiced, dispatched and
-       delivered through the chain without a single piece moving.
-
-       The owner shortened the chain on 22 September and asked for the stock to
-       come off at DISPATCHED, which is now where it happens
-       (SalesController.SetOrderStatus). Two screens taking the same goods off
-       the same shelf is how a count goes wrong, so this one stops:
-
-         · PROCESSING and PACKED were deleted by migration 21, so the queue
-           below is empty and Pack cannot find a status to write.
-         · The nav entry and the /packing page are gone from the front end.
-         · The endpoints are left in place, refusing politely and saying where
-           the work moved to, because a 404 tells somebody with an old tab open
-           nothing at all.
-       ═══════════════════════════════════════════════════════════════════ */
-    private const string Retired =
-        "The packing screen has been retired. Stock now comes off the shelf when the order " +
-        "is marked Dispatched, and the order screen asks which place it is going out of.";
-
-    /* The states that used to mean "this needs packing". Both are gone from
-       the database, so this matches nothing -- kept so the query still reads
-       as what it was. */
-    private static readonly string[] Queue = { "CONFIRMED", "PROCESSING" };
+    /// <summary>The two statuses this screen will pick an order up from. See the class comment.</summary>
+    private static readonly string[] Ready = { OrderWorkflow.Invoiced, OrderWorkflow.AtOrderDept };
 
     // ══════════════════════════════════════════════════════════════════
-    //  THE QUEUE
+    //  LOOKUPS -- the sales and customer dropdowns
     // ══════════════════════════════════════════════════════════════════
 
-    [HttpGet]
-    public async Task<IActionResult> GetPackingQueue([FromQuery] int? locationId, [FromQuery] string? q)
+    /// <summary>
+    /// Only salespeople and customers who currently have something ready to
+    /// pack. A full staff list or a full customer list would be true every
+    /// day of the year and useful on none of them -- the point of these two
+    /// boxes is to narrow the third one down, and there is nothing to narrow
+    /// towards a name with an empty queue.
+    /// </summary>
+    [HttpGet("lookups")]
+    public async Task<IActionResult> Lookups()
+    {
+        try
+        {
+            var readyOrders = _db.SalesOrders.AsNoTracking()
+                .Where(o => Ready.Contains(o.Status.StatusKey));
+
+            var repIds = await readyOrders
+                .Where(o => o.SalesPersonUserId != null)
+                .Select(o => o.SalesPersonUserId!.Value)
+                .Distinct()
+                .ToListAsync();
+
+            /* "assigned to the sales role" -- literally. A ready order's
+               SalesPersonUserId is usually a rep, but not always (an order
+               keyed in on somebody's behalf still carries who keyed it in),
+               and this box must never offer a name that is not really a
+               salesperson. The customer list below still tags itself with
+               the order's true credited id, whatever role that person holds --
+               only the dropdown's OWN contents are narrowed here. */
+            var salesPeople = await _db.Employees.AsNoTracking()
+                .Where(e => repIds.Contains(e.UserId) && e.User.Role.RoleKey == "sales")
+                .OrderBy(e => e.User.FullName)
+                .Select(e => new { id = e.UserId, name = e.User.FullName })
+                .ToListAsync();
+
+            /* One row per customer with a ready order, and EVERY rep credited
+               with one of their ready orders -- not the customer's assigned rep
+               (Party.SalesPersonUserId), which can differ from who actually
+               wrote a given order, and not always exactly one: the same shop
+               can have one order from its usual rep and another keyed in by
+               somebody else. The reverse flow ("pick the customer, the
+               salesperson sets itself") only guesses when there is exactly one
+               name to guess -- with more than one it leaves the box open and
+               the order list, filtered on the customer alone, already shows
+               every rep's order for them. */
+            var pairs = await readyOrders
+                .Where(o => o.SalesPersonUserId != null)
+                .Select(o => new { o.CustomerUserId, o.SalesPersonUserId })
+                .Distinct()
+                .ToListAsync();
+
+            var customerIds = pairs.Select(x => x.CustomerUserId).Distinct().ToList();
+            var names = await _db.Parties.AsNoTracking()
+                .Where(p => customerIds.Contains(p.UserId))
+                .Select(p => new { p.UserId, name = (p.DisplayName ?? p.LegalName) })
+                .ToDictionaryAsync(p => p.UserId, p => p.name);
+
+            var customers = pairs.GroupBy(x => x.CustomerUserId)
+                .Select(g => new
+                {
+                    id = g.Key,
+                    name = names.GetValueOrDefault(g.Key, $"Customer {g.Key}"),
+                    repIds = g.Select(x => x.SalesPersonUserId!.Value).Distinct().ToList()
+                })
+                .OrderBy(c => c.name)
+                .ToList();
+
+            return Ok(new
+            {
+                salesPeople,
+                customers,
+                count = await readyOrders.CountAsync()
+            });
+        }
+        catch (Exception ex)
+        {
+            return Fail(ex, "load the packing lookups");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  THE ORDER DROPDOWN
+    // ══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Orders ready to pack, narrowed by whichever of the two upstream boxes
+    /// is filled in. Neither is required -- an empty order dropdown with
+    /// nothing picked above it is still every order waiting on the order desk.
+    /// </summary>
+    [HttpGet("orders")]
+    public async Task<IActionResult> GetPackableOrders(
+        [FromQuery] int? salesPersonId, [FromQuery] int? customerId)
     {
         try
         {
             var rows = _db.SalesOrders.AsNoTracking()
-                .Where(o => Queue.Contains(o.Status.StatusKey));
+                .Where(o => Ready.Contains(o.Status.StatusKey));
 
-            if (locationId is not null) rows = rows.Where(o => o.LocationId == locationId);
-            if (!string.IsNullOrWhiteSpace(q))
-            {
-                var term = q.Trim().ToLower();
-                rows = rows.Where(o => o.OrderNo.ToLower().Contains(term) ||
-                                       (o.CustomerUser.DisplayName ?? o.CustomerUser.LegalName).ToLower().Contains(term));
-            }
+            if (salesPersonId is not null) rows = rows.Where(o => o.SalesPersonUserId == salesPersonId);
+            if (customerId is not null) rows = rows.Where(o => o.CustomerUserId == customerId);
 
             var items = await rows
-                .OrderBy(o => o.DeliveryDate ?? o.OrderDate).ThenBy(o => o.OrderId)
+                .OrderBy(o => o.OrderDate).ThenBy(o => o.OrderId)
                 .Select(o => new
                 {
                     id = o.OrderId,
                     orderNo = o.OrderNo,
                     customerId = o.CustomerUserId,
                     customerName = (o.CustomerUser.DisplayName ?? o.CustomerUser.LegalName),
-                    city = o.CustomerUser.City.CityName,
-                    locationId = o.LocationId,
-                    location = o.Location.LocationName,
-                    orderDate = o.OrderDate,
-                    deliveryDate = o.DeliveryDate,
+                    repId = o.SalesPersonUserId,
+                    repName = o.SalesPersonUserId == null ? null
+                        : _db.Users.Where(u => u.UserId == o.SalesPersonUserId).Select(u => u.FullName).FirstOrDefault(),
                     status = o.Status.StatusKey,
                     statusName = o.Status.StatusName,
+                    orderDate = o.OrderDate,
                     total = o.TotalAmount,
                     itemCount = o.SalesOrderItems.Count,
-                    totalUnits = o.SalesOrderItems.Sum(i => (int?)i.Quantity) ?? 0,
-                    salesPerson = o.SalesPersonUser != null ? o.SalesPersonUser.User.FullName : null,
-                    lines = o.SalesOrderItems.OrderBy(i => i.LineNo).Select(i => new
-                    {
-                        productId = i.ProductId,
-                        sku = i.Product.Sku,
-                        name = i.Product.ProductName,
-                        packing = i.Product.Packing,
-                        qty = i.Quantity,
-
-                        /* What is actually on the shelf at THIS order's location.
-                           A picker needs to know before walking to the rack. */
-                        onHand = i.Product.StockBalances
-                            .Where(s => s.LocationId == o.LocationId)
-                            .Sum(s => (int?)s.Quantity) ?? 0
-                    }).ToList()
+                    totalUnits = o.SalesOrderItems.Sum(l => (int?)l.Quantity) ?? 0,
+                    /* A handful of pictures for the closed row -- see the
+                       Packing page. The full line list is the {id} call below. */
+                    thumbnails = o.SalesOrderItems.OrderBy(l => l.LineNo)
+                        .Select(l => l.Product.ImageUrl)
+                        .Where(u => u != null)
+                        .Take(4)
+                        .ToList()
                 })
                 .ToListAsync();
 
-            var today = Today();
-            var shaped = items.Select(o => new
-            {
-                o.id, o.orderNo, o.customerId, o.customerName,
-                customerInitials = Initials(o.customerName),
-                o.city, o.locationId, o.location, o.orderDate, o.deliveryDate,
-                o.status, o.statusName, o.total, o.itemCount, o.totalUnits,
-                o.salesPerson, o.lines,
-                waitingDays = today.DayNumber - o.orderDate.DayNumber,
-                isLate = o.deliveryDate != null && o.deliveryDate < today,
-
-                /* Can this order actually be packed right now? If any line is
-                   short the bench needs to know before it starts, not halfway. */
-                canPack = o.lines.All(l => l.onHand >= l.qty),
-                shortLines = o.lines.Where(l => l.onHand < l.qty)
-                    .Select(l => new { l.sku, l.name, l.qty, l.onHand, short_ = l.qty - l.onHand })
-                    .ToList()
-            }).ToList();
-
-            return Ok(new
-            {
-                waiting = shaped.Count,
-                late = shaped.Count(o => o.isLate),
-                blocked = shaped.Count(o => !o.canPack),
-                items = shaped
-            });
+            return Ok(new { count = items.Count, items });
         }
         catch (Exception ex)
         {
-            return Fail(ex, "load the packing queue");
+            return Fail(ex, "load packable orders");
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    //  PACKING AN ORDER
-    // ══════════════════════════════════════════════════════════════════
-
     /// <summary>
-    /// Marks an order packed and takes the stock off the shelf.
-    ///
-    /// Stock leaves at PACKING, not at invoice: the goods have physically left
-    /// the rack and the shelf count must say so. Every reduction writes a
-    /// StockMovement row so the movement report can explain where it went.
+    /// One order's full detail: its customer and salesperson (so the screen can
+    /// set both dropdowns above it, whichever direction the order was reached
+    /// from), and every line with the picture, the quantity ordered, and the
+    /// PRICE -- which is deliberately the product's own selling price
+    /// (Product.SalePrice, what the Super Admin set), never the order line's
+    /// own Rate. "The Order Department must only view the base selling price
+    /// defined by the Super Admin," in the owner's own words -- a rep's margin
+    /// is not this screen's business.
     /// </summary>
-    [HttpPost("{id:int}/pack")]
-    public async Task<IActionResult> Pack(int id)
+    [HttpGet("orders/{id:int}")]
+    public async Task<IActionResult> GetPackableOrder(int id)
     {
-        /* Retired -- see the note at the top of this file. Refused here rather
-           than left to fail deeper down, where it would come back as "No PACKED
-           status is configured" and read like a broken installation. */
-        return BadRequest(new { message = Retired });
-
-#pragma warning disable CS0162 // unreachable: kept as the record of what it did
         try
         {
-            var order = await _db.SalesOrders
-                .Include(o => o.Status)
-                .Include(o => o.SalesOrderItems)
-                .FirstOrDefaultAsync(o => o.OrderId == id);
-
-            if (order is null) return NotFound(new { message = $"No order with id {id}." });
-
-            if (order.Status.StatusKey == "CREDIT_HOLD")
-                return BadRequest(new
+            var order = await _db.SalesOrders.AsNoTracking()
+                .Where(o => o.OrderId == id && Ready.Contains(o.Status.StatusKey))
+                .Select(o => new
                 {
-                    message = $"{order.OrderNo} is on credit hold and needs the owner's approval before it can be packed."
-                });
-            if (order.Status.StatusKey == "PACKED")
-                return BadRequest(new { message = $"{order.OrderNo} is already packed." });
-            if (!Queue.Contains(order.Status.StatusKey))
-                return BadRequest(new
-                {
-                    message = $"{order.OrderNo} is {order.Status.StatusName} and is not waiting to be packed."
-                });
-
-            var packed = await _db.OrderStatuses.FirstOrDefaultAsync(s => s.StatusKey == "PACKED");
-            if (packed is null) return BadRequest(new { message = "No PACKED status is configured." });
-
-            var issue = await _db.MovementTypes.FirstOrDefaultAsync(m => m.TypeKey == "SALE")
-                        ?? await _db.MovementTypes.FirstOrDefaultAsync(m => m.TypeKey == "ISSUE");
-            if (issue is null) return BadRequest(new { message = "No outbound movement type is configured." });
-
-            await using var tx = await _db.Database.BeginTransactionAsync();
-
-            /* Check every line BEFORE touching any of them, so a short line on
-               row 5 does not leave rows 1-4 already deducted. */
-            var shortages = new List<object>();
-            foreach (var line in order.SalesOrderItems)
-            {
-                var bal = await _db.StockBalances
-                    .FirstOrDefaultAsync(s => s.ProductId == line.ProductId &&
-                                              s.LocationId == order.LocationId);
-                var onHand = bal?.Quantity ?? 0;
-                if (onHand < line.Quantity)
-                {
-                    var p = await _db.Products.AsNoTracking()
-                        .FirstOrDefaultAsync(x => x.ProductId == line.ProductId);
-                    shortages.Add(new
+                    id = o.OrderId,
+                    orderNo = o.OrderNo,
+                    customerId = o.CustomerUserId,
+                    customerName = (o.CustomerUser.DisplayName ?? o.CustomerUser.LegalName),
+                    repId = o.SalesPersonUserId,
+                    repName = o.SalesPersonUserId == null ? null
+                        : _db.Users.Where(u => u.UserId == o.SalesPersonUserId).Select(u => u.FullName).FirstOrDefault(),
+                    status = o.Status.StatusKey,
+                    statusName = o.Status.StatusName,
+                    locationId = o.LocationId,
+                    orderDate = o.OrderDate,
+                    total = o.TotalAmount,
+                    lines = o.SalesOrderItems.OrderBy(l => l.LineNo).Select(l => new
                     {
-                        sku = p?.Sku,
-                        name = p?.ProductName,
-                        needed = line.Quantity,
-                        onHand,
-                        shortBy = line.Quantity - onHand
-                    });
-                }
-            }
-            if (shortages.Count > 0)
-                return BadRequest(new
-                {
-                    message = $"{order.OrderNo} cannot be packed -- {shortages.Count} " +
-                              $"{(shortages.Count == 1 ? "line is" : "lines are")} short.",
-                    shortages
-                });
+                        orderItemId = l.OrderItemId,
+                        productId = l.ProductId,
+                        name = l.Product.ProductName,
+                        sku = l.Product.Sku,
+                        imageUrl = l.Product.ImageUrl,
+                        packing = l.Product.Packing,
+                        qty = l.Quantity,
+                        price = l.Product.SalePrice
+                    }).ToList()
+                })
+                .FirstOrDefaultAsync();
 
-            foreach (var line in order.SalesOrderItems)
-            {
-                var bal = await _db.StockBalances
-                    .FirstAsync(s => s.ProductId == line.ProductId && s.LocationId == order.LocationId);
-
-                bal.Quantity -= line.Quantity;
-
-                _db.StockMovements.Add(new StockMovement
-                {
-                    ProductId = line.ProductId,
-                    LocationId = order.LocationId,
-                    MovementTypeId = issue.MovementTypeId,
-                    MovedAt = Now(),
-                    ReferenceNo = order.OrderNo,
-                    Quantity = -line.Quantity,
-                    BalanceAfter = bal.Quantity,
-                    UserId = CurrentUserId()
-                });
-            }
-
-            order.StatusId = packed.StatusId;
-            await _db.SaveChangesAsync();
-            await tx.CommitAsync();
-
-            await Log("ORDER_PACKED", "SalesOrder", order.OrderNo,
-                $"{order.SalesOrderItems.Count} lines", 1);
-
-            /* -- A6 -- the rep who took it is told, because the customer will
-               ring THEM to ask where it is. */
-            await _push.NotifyRolesAsync(
-                new[] { "super-admin", "order-dept" },
-                NotificationKinds.OrderPacked,
-                $"Order packed by {CurrentUserName()}",
-                $"{order.OrderNo} is packed and ready to go out.",
-                url: $"/sales/orders/{order.OrderId}",
-                exceptUserId: CurrentUserId(),
-                alsoUserIds: order.SalesPersonUserId is null
-                    ? null : new[] { order.SalesPersonUserId.Value });
+            if (order is null)
+                return NotFound(new { message = $"Order {id} is not waiting to be packed." });
 
             return Ok(new
             {
-                id,
-                orderNo = order.OrderNo,
-                message = $"{order.OrderNo} packed and stock updated."
+                order.id, order.orderNo, order.customerId, order.customerName,
+                order.repId, order.repName, order.status, order.statusName,
+                order.locationId, order.orderDate, order.total,
+                lineTotal = order.lines.Sum(l => (int?)l.qty) ?? 0,
+                order.lines
             });
         }
         catch (Exception ex)
         {
-            return Fail(ex, $"pack order {id}");
+            return Fail(ex, $"load order {id} for packing");
         }
-#pragma warning restore CS0162
     }
 }

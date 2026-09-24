@@ -123,10 +123,10 @@ public class PushNotificationService
 
             /* WHO THIS WAS SENT TO, in the message itself. The same event goes
                to four or five people at once and the wording never said which
-               copy you were holding -- so a keeper reading "Order invoiced"
+               copy you were holding -- so somebody reading "Order invoiced"
                could not tell whether it had been addressed to them, to the
                order desk, or to the owner. Full name and the role in words,
-               because "zain" and "warehouse-keeper" are not what anybody calls
+               because "zain" and "order-dept" are not what anybody calls
                themselves out loud. */
             body = await AddressedTo(userId, body);
 

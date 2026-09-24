@@ -83,6 +83,48 @@ public static class PdfStore
     }
 
     /// <summary>
+    /// Removes a raw asset from the documents Cloudinary account.
+    ///
+    /// Added 23 September for the Packing screen: dispatching through it
+    /// replaces an invoice's PDF with one carrying an extra "Dispatching"
+    /// page, and the owner asked that the file it replaces not be left behind
+    /// -- "clean up/delete any orphaned PDF files from Cloudinary that
+    /// disconnect from the database." This is the one caller that destroys an
+    /// old file; every other document kind in this project deliberately never
+    /// does (see DocumentArchive's own note on why), because a link somebody
+    /// was already sent must keep working. An invoice's PDF is different: the
+    /// old copy did not yet carry the dispatch record, so there is no reason
+    /// anybody would have been sent that link on its own -- it only ever
+    /// travelled attached to the row it replaces.
+    ///
+    /// Swallows its own failure. Cloudinary being briefly unreachable must not
+    /// undo a dispatch that has already moved stock; a stray file left behind
+    /// is a cleanup job, not a reason to fail the request.
+    /// </summary>
+    public static async Task<bool> DestroyAsync(IConfiguration cfg, string publicId, ILogger? logger = null)
+    {
+        try
+        {
+            var section = cfg.GetSection("CloudinaryPdfs");
+            var client = new Cloudinary(new CloudinaryAccount(
+                section["CloudName"], section["ApiKey"], section["ApiSecret"]));
+            client.Api.Secure = true;
+
+            var result = await client.DestroyAsync(new DeletionParams(publicId)
+            {
+                ResourceType = ResourceType.Raw
+            });
+
+            return string.Equals(result.Result, "ok", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Could not remove the old PDF {PublicId} from Cloudinary.", publicId);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// HEAD the URL we are about to hand out. A failure here is not an error --
     /// the asset is stored either way -- it only decides which link the app
     /// gives a customer.

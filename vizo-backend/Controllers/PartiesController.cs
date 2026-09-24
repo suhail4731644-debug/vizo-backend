@@ -283,6 +283,10 @@ public class PartiesController : ApiControllerBase
                 p.creditLimit, p.creditDays, p.holdPolicyId, p.creditHoldPolicy,
                 p.openingBalance, p.salesPersonUserId, p.salesPerson, p.defaultLocationId,
                 p.rating, p.notes, p.isActive, p.createdAt,
+                /* Projected above but never handed on until now, so the customer screen's
+                   "Legal documents" button and the edit screen's pictures had nothing to
+                   show. */
+                p.documents,
                 p.orderCount, p.invoiceCount,
                 currentBalance = balance
             });

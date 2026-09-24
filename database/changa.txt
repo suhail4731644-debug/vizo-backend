@@ -2,10 +2,347 @@
  CHANGA  —  what YOU have to change, by hand, outside the code
 ═══════════════════════════════════════════════════════════════════════════════
 
- Updated 22 September 2026 with the order-chain and new-customer work
- (section C, first). Section B is 21 September, A is 20 September and 1-4 are
- 17 September. All of them still stand.
+ Updated with the latest session (section F, first): the Order Department's
+ Packing screen and the loss of Claims. E is the warehouse role and panel
+ deleted and purchase returns removed; D is Railway, the Gemini free-tier
+ limit and two earlier live-data changes; C is the order-chain and
+ new-customer work, B is 21 September, A is 20 September and
+ 1-4 are 17 September. All of them still stand.
 
+
+───────────────────────────────────────────────────────────────────────────────
+ D.  21 SEPTEMBER, LATER — RAILWAY, THE FREE-TIER LIMIT, AND WHAT IS ALREADY DONE
+───────────────────────────────────────────────────────────────────────────────
+
+ D1  RAILWAY: ONE NEW VARIABLE, AND NOTHING ELSE
+
+     You asked which credentials still have to be added on Railway. It is ONE:
+
+         Gemini__ApiKey      the Google AI Studio key
+
+     I checked, rather than assumed: the committed appsettings.json has exactly
+     one blank value, Gemini:ApiKey. Everything else the API reads -- the Neon
+     connection string, the JWT key, both Cloudinary accounts, the Gmail login,
+     the VAPID push keys -- is already in that file and travels with the code, so
+     Railway needs nothing more for them. (You already set App__WebBaseUrl.)
+
+     Vercel (the website) needs NO new variables.
+
+     Set it at Railway -> your API service -> Variables -> New Variable. The
+     double underscore is ASP.NET's way of writing Gemini:ApiKey. Redeploy after.
+
+     IF YOU DO NOT, nothing breaks. The customer screen still takes and saves the
+     photographs and the salesperson types the details in; the AI reports show
+     their figures and simply leave the written explanation off.
+
+     A NOTE ON "I HAVE PASTED THE KEY HERE". No key arrived with your message --
+     the text stopped at "Also, I have pasted Gemini key here". I used the key you
+     sent before, which is still in backend/vizo-backend/appsettings.Development.json
+     on this machine (gitignored, never pushed). If you meant a NEW key, put that
+     one in that file and on Railway instead.
+
+ D2  THE FREE KEY RUNS OUT, AND THIS IS THE ONE THING I WOULD DO SOMETHING ABOUT
+
+     While testing, the AI stopped answering half way through and Google said:
+
+         429  "You exceeded your current quota ...
+              generate_content_free_tier_requests, limit: 20"
+
+     A free key gets about TWENTY requests a day PER MODEL. This system asks three
+     models in turn (gemini-flash-latest, then two lighter ones), so roughly sixty
+     a day before everything AI goes quiet until the next day. Reading one
+     customer's papers costs one request, an AI report or a question costs one,
+     and the nightly summary one more. For a shop opening a few accounts a day and
+     glancing at a report or two, that is enough. On a day of testing, or a busy
+     one, it is not.
+
+     THE FIX IS NOT CODE: in Google AI Studio, attach a billing account to the
+     project ("Set up billing"). The same key then has paid limits, which are
+     far higher, and at this volume the cost is small.
+     A paid key is also excluded from Google using the photographs to train its
+     models, which the free tier is not.
+
+     WHAT THE APP DOES WHEN IT HITS THE LIMIT: it moves to the next model at once,
+     and if all three are spent it says "the reader did not answer, type it in".
+     Before today it did not even do that for the AI REPORTS -- see convey.txt.
+
+ D3  TWO DATABASE CHANGES ARE ALREADY MADE (migration 23, run on Neon)
+
+     You asked for them and they are done, with the figures to undo them in
+     23_undo_values.txt. Said plainly because they are changes to the live data:
+
+       ORDER DEPARTMENT LOST three rights: products.manage, purchases.view and
+       receipts.stock. It KEEPS stock.view, stock.transfer and stock.correct. A new
+       right, products.view ("See items"), was created and given to the Super Admin,
+       the Accountant and the Warehouse Keeper -- so nobody but the order desk
+       loses Items.
+
+       SALES TAX IS 0% ON EVERY PRODUCT. There was never a setting: each product
+       carries its own rate and every screen starts from it. 36 products were at
+       18% and TWO WERE AT 10%. I set all 38 to 0, reading "sales tax must be 0%"
+       as meaning all of it. If the two at 10% were meant to stay, they are in
+       23_undo_values.txt by product id.
+
+       Orders and invoices already issued keep the rate they were made at. Only
+       what NEW documents start at has changed.
+
+     NOBODY HAS TO SIGN OUT AND IN. The menu reads rights from the database on
+     every page load, and the API refuses the order desk by role. I tested it with
+     sign-in tokens minted BEFORE the change.
+
+ D4  WHAT THE ORDER DESK SEES NOW
+
+     Menu: Stock in Hand, Transfers, Stock Correction, Stock History -- and no
+     Items, Categories, Brands, or Purchases at all (and no Suppliers, which
+     shows what has been bought). Typing any of those addresses goes to
+     "Forbidden", and the API answers 403 to every call, including creating.
+
+     In Stock in Hand and the transfer and correction records, a product's name
+     used to be a link to its Item screen. For the order desk it now goes to that
+     product's STOCK HISTORY instead, which is what they were looking for and is
+     a page they may open.
+
+     ONE SIDE EFFECT YOU SHOULD KNOW ABOUT: the Accountant and the Warehouse Keeper
+     can no longer open Categories and Brands by typing the address. Their menus
+     never showed them, and creating or changing one needs products.manage, which
+     only you hold. Nothing they could see has changed.
+
+ D5  THE SALESPERSON'S RATE AND MARGIN (revised the same day)
+
+     The order screen now works like this, as you described it:
+
+       RATE       fills itself with the selling price YOU set on the product, and
+                  cannot be edited.
+       MARGIN (in Rs.)  is added on top of the rate.
+       MARGIN %   is a percentage OF THE RATE: at Rs. 100, 10% adds Rs. 10.
+       FINAL PRICE  is shown under each line as "PKR 1,078 / piece" (rate + margin).
+
+     The two margin boxes follow each other, and the rate never moves -- typing a
+     margin used to re-work the rate from the landed cost, which is what made the
+     numbers jump. Example on the live data: the T9 earbuds sell at 980; 10% adds
+     98, so the piece is 1,078; Rs. 50 shows 5.1% and 1,030.
+
+     A salesperson can add at most 10% and cannot go below the rate. Typing more
+     pulls it back to 10% with a red note, and the API refuses any rate outside
+     980 to 1,078 for that item. The Accountant (editing at Invoiced/Edit) and you
+     are not held to it. An item with NO selling price on file has nothing to take
+     a percentage of and is not limited.
+
+     THIS REPLACES the first version, which started at the landed cost. It means
+     the salesperson's price is now anchored to the price YOU keep on each product,
+     so that price has to be right. Two things to know: the picker and the line show
+     that price, and a product whose price is below its own landed cost shows a red
+     "fixed rate is below what this piece cost to land" so you can spot it.
+
+ D6  PICTURES: ONLY 3 OF YOUR 36 ACTIVE PRODUCTS HAVE ONE
+
+     Every product dropdown in the project now shows the picture large (about 110
+     to 145 pixels, was 40 to 48), and tapping one elsewhere in the app enlarges
+     it. But 33 products have no picture, so most rows show a grey placeholder.
+     Add them at Items -> the product -> Edit -> Image. The screen will not look
+     the way you are imagining until they are in.
+
+ D7  A PUSH NOTIFICATION MAY HAVE REACHED YOU FROM ME
+
+     To test the new-customer screen end to end I created one customer through the
+     real screen, signed in as Sara Khan. The system did what it does for a new
+     account and sent "Account opened by Sara" to you (Umer Memon) and to the AdvPOS System account.
+     The customer, its pictures and its PDF are all deleted, and I deleted the two
+     in-app notifications, but a push that had already gone to a phone cannot be
+     recalled. If somebody asks about "VZ-C-0018", that is what it was.
+
+───────────────────────────────────────────────────────────────────────────────
+ E.  22 SEPTEMBER, LATER — THE WAREHOUSE ROLE IS GONE; PURCHASE RETURNS TOO
+───────────────────────────────────────────────────────────────────────────────
+
+ E1  THE WAREHOUSE ROLE AND ITS PANEL ARE DELETED — WAREHOUSES STAY AS PLACES
+
+     Your words: "completely delete role of Warehouse and all pages of
+     warehouse panel ... however warehouse would be used as a location for
+     transfers and stock will keep at warehouse so that data will remain in
+     system."
+
+     Done, and the two halves of that sentence are kept exactly separate:
+
+       GONE   the role "Warehouse Keeper" -- nobody can sign in as one, the
+              login screen no longer offers it, /warehouse answers "Forbidden"
+              to everyone, and the picking-list API behind it is deleted.
+
+       KEPT   "Karachi Warehouse" and "Lahore Warehouse" as LOCATIONS. Every
+              stock row, every past transfer, every past movement against them
+              is untouched. A transfer can still move goods to or from a
+              warehouse; dispatch can still send stock out of one. This was
+              never in question -- the role and the place are two different
+              things this system happened to spell the same way, and only one
+              of them was asked to go.
+
+     ONE ACCOUNT HELD THE ROLE: muhammadtalhabinsuhail@gmail.com (Talha) --
+     his own account for testing the role, not a real warehouse worker's. It is
+     now ORDER DEPARTMENT, at Karachi Order Department, because the order desk
+     is the role that already does the physical stock work in this chain
+     (Invoiced -> Processing in Order Dept -> Dispatched). If that is not where
+     you want him, Setup > Users changes it in two clicks -- nothing about the
+     removal depends on that particular choice.
+
+     NOBODY ELSE HAS TO SIGN OUT AND IN. Checked with a warehouse-keeper token
+     minted before the change: it is refused everywhere the role used to reach,
+     because the role name itself is gone from every check, not merely hidden
+     from a menu.
+
+ E2  PURCHASE RETURNS ARE REMOVED; SALES RETURNS ARE NOT
+
+     Your words: "completely remove purchase return scenario in the system
+     however sales return will remain exists in the system."
+
+     The screen, its "New return" button and the three API endpoints behind
+     them (list, one return, create) are gone. Sales Returns is untouched --
+     different menu, different controller, different rule (accountant and
+     Super Admin only), never went near this change.
+
+     WHAT WAS *NOT* TOUCHED, ON PURPOSE: nine real purchase returns already
+     exist in the database, the earliest from 28 April 2026, each with its own
+     posting to the ledger. That is accounting history, not test data, and I
+     did not drop it without being asked to -- dropping it would make the
+     ledger disagree with what was actually posted, and the database is
+     read-only by default for exactly this reason. So:
+
+       - the tables PurchaseReturn and PurchaseReturnItem still hold all nine
+       - a product's Stock History still folds them into its ledger correctly
+       - the Document Store can still print or share the PDF of one that
+         already exists
+       - only MAKING A NEW ONE, and the dedicated screen to browse them by
+         name, are gone
+
+     If you want the nine historical rows purged as well, say so plainly and it
+     is a second, separate script -- not something to bundle into a role
+     removal where a mistake is harder to spot.
+
+ E3  VERIFIED
+
+     API, with fresh tokens: the order desk (Talha and a long-standing
+     order-dept account) reaches Stock in Hand, Transfers, Stock Correction,
+     Stock History and is refused on Items, Categories, Brands and every
+     purchases endpoint, exactly as migration 23 already set up. The purchase-
+     return endpoints answer 404 for every role, including you. A token minted
+     as warehouse-keeper before this change is refused everywhere that role
+     used to reach.
+
+     Browser: the login screen shows four panels, not five. Setup > Roles no
+     longer lists Warehouse Keeper and shows Order Department at 4 users, 19
+     permissions (22 minus the three migration 23 already took). The sidebar
+     for every role tested shows no Warehouse item and no Purchase Returns
+     link. /warehouse and /purchases/returns both answer "Forbidden" or "page
+     not found".
+
+     Gate: backend 0 errors; frontend `tsc` clean, `eslint` 0 errors, same 3
+     pre-existing warnings as before (react-hooks/incompatible-library on
+     react-hook-form's watch(), one stale eslint-disable, one unused icon
+     import that predates this session).
+
+
+───────────────────────────────────────────────────────────────────────────────
+ F.  23 SEPTEMBER — THE ORDER DEPARTMENT'S OWN PANEL: PACKING, AND NO CLAIMS
+───────────────────────────────────────────────────────────────────────────────
+
+ F1  SIGNING IN AS THE ORDER DESK NOW OPENS PACKING
+
+     Your words: "Whenever a user with the Order Department role logs in, the
+     first page they should see is the Packing page. This means the Dashboard
+     page should not render post-login."
+
+     Done with one data change, nothing else: "Role"."HomePath" for order-dept
+     is now /packing, and both the login screen and the address bar's own "/"
+     already read that column -- Setup > Roles edits it by hand if you ever
+     want it back. Dashboard itself still exists; it is simply not where
+     signing in lands any more.
+
+ F2  CLAIMS IS GONE FOR THE ORDER DESK
+
+     "remove Claims from it. There is no need for a Claims page in the Order
+     Department panel."
+
+     Taken away on all three layers that could show it to them: the permission
+     (claims.view/receive/settle), the API (ClaimsController now refuses the
+     role outright), and the route guard. The Accountant and you keep it
+     unchanged. The order desk's own dashboard also lost its "Claims still
+     open" card and counter, since there is nothing behind either any more.
+
+ F3  THE PACKING SCREEN ITSELF
+
+     Three dropdowns that narrow each other down, in any direction you fill
+     them in:
+
+       Salesperson   every rep who currently has an order waiting to be
+                     packed -- not a full staff list, which is true every day
+                     and useful on none of them.
+       Customer      narrows to that rep's ready customers. Picked FIRST, it
+                     sets the salesperson above it -- but only when the shop
+                     has a ready order from exactly one rep. Cellular World
+                     KHI, for instance, has orders from two different people
+                     right now, so picking that shop leaves the salesperson
+                     box open rather than guessing which one you meant; the
+                     order list below still shows both.
+       Order         narrows to whichever of the two boxes above is filled in.
+                     Picking one directly sets both boxes above it from the
+                     order's own record. The box itself is large, shows a
+                     picture for each item, the order number, the customer, who
+                     wrote it, how many pieces, and the total -- never a bare
+                     ID.
+
+     Pick an order and its lines appear below: a picture, the name, how many
+     were ordered, and the PRICE -- which is deliberately your own selling
+     price on the item (what you set at Items, never whatever margin a rep
+     added on top). Proved against a real order that had a margin on it: the
+     order itself charged Rs. 3,680 a piece; the Packing screen showed Rs. 980,
+     your own price on that item.
+
+     The quantity is the one thing that can be typed into, and it can only go
+     DOWN from what was ordered -- typing more, or leaving the box blank, is
+     refused, both on the screen and by the API if it is ever asked for
+     directly. Reduce one and it is not a quiet edit:
+
+       - the salesperson, the accountant and you are all told, by name, which
+         item was short and by how much;
+       - the customer's invoice is rebuilt with an extra page appended --
+         "DISPATCH RECORD" -- showing every line's requested and dispatched
+         count and the shortfall, without a single figure on the original bill
+         being touched;
+       - the old copy of that invoice's PDF is removed from Cloudinary once the
+         new one is safely stored, so nothing orphaned is left sitting there.
+
+     Pressing "Next" is the real action -- this is the moment the goods
+     actually leave the shelf, deducting only what was actually sent, never the
+     full amount if it was reduced. Only once that has gone through does the
+     courier step appear: the same channel-and-courier form /dispatch has
+     always used, now reached from here. If booking the courier fails for any
+     reason, the order is already sent -- the screen says so and offers to try
+     booking again, rather than risking sending it twice.
+
+     A new "Delivered" link, next to Delivery, is the same screen pre-filtered
+     to what has already arrived -- one page, not two that could drift apart.
+
+ F4  VERIFIED
+
+     A real order with a genuine margin on it (base Rs. 980, charged Rs.
+     3,680) proved the price shown is yours, not the rep's. A live test order
+     (Sara's customer, 3 pieces) proved the whole chain: asking for more than
+     ordered is refused by the API; sending 2 of 3 deducted exactly 2 from the
+     shelf, recorded DispatchedQty, sent the shortage notice to the
+     salesperson, the accountant and the Super Admin, rebuilt the invoice to 2
+     pages with the dispatch record on the second, destroyed the old PDF from
+     Cloudinary (it now 404s) and kept the new one working; the courier was
+     then booked through the existing endpoint. Everything the test created --
+     the order, its invoice, the delivery, the stock movement, all 46
+     notifications, the new PDF, and the three document-series numbers -- was
+     removed afterwards, and the shelf is back at its original count.
+
+     Browser, as a real order-dept account: signing in and visiting "/" both
+     land on /packing; the sidebar has no Claims link and does have Packing and
+     Delivered; the three dropdowns cascade exactly as above; the quantity box
+     refuses more than was ordered; the screen works at a 375px phone width
+     with no horizontal scroll.
+
+     Gate: backend 0 errors; frontend `tsc` clean, `eslint` 0 errors.
 
 ───────────────────────────────────────────────────────────────────────────────
  C.  22 SEPTEMBER — ONE KEY, TWO MIGRATIONS, AND A WORD TO YOUR ORDER DESK

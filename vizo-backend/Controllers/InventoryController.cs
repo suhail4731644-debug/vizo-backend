@@ -22,6 +22,29 @@ namespace vizo_backend.Controllers;
 /// </summary>
 [Route("api/inventory")]
 [ApiController]
+/* WHO MAY SEE AND CHANGE THE ITEM CATALOGUE.
+
+   The whole controller is BackOffice, which lets the Order Department reach
+   every screen in the Stock section. The owner's rule (21 September) is that
+   the order desk uses Stock in Hand, Transfers, Stock Correction and Stock
+   History -- and NOT Items, Categories or Brands, which they may neither open
+   nor create.
+
+   So the item, category and brand endpoints below name the three roles that may
+   have anything to do with the catalogue -- the order desk is not one of them --
+   and creating or changing anything also needs products.manage.
+
+   BY ROLE, NOT BY THE products.view PERMISSION, FOR READING. Permissions reach
+   this API in the sign-in token, which lives eight hours; the menu in the web
+   app refreshes them from the database on every page load. Checking the new
+   permission here would mean an accountant already signed in sees "Items" in
+   their menu and is refused by the API until they sign in again. The role has no
+   such window, and takes effect the moment this is deployed. The permission is
+   still what the menu and the route guard read.
+
+   Everything else here (stock-levels, movements, transfers, adjustments and
+   /lookups, which the transfer and correction forms fill their pickers from)
+   is deliberately left as it was. The attributes are ANDed with BackOffice. */
 [Authorize(Policy = "BackOffice")]
 public class InventoryController : ApiControllerBase
 {
@@ -37,6 +60,7 @@ public class InventoryController : ApiControllerBase
     // ══════════════════════════════════════════════════════════════════
 
     [HttpGet("products")]
+    [Authorize(Roles = "super-admin,accountant")]
     public async Task<IActionResult> GetProducts(
         [FromQuery] string? q, [FromQuery] int? categoryId, [FromQuery] int? brandId,
         [FromQuery] string? status, [FromQuery] bool includeInactive = true,
@@ -163,6 +187,7 @@ public class InventoryController : ApiControllerBase
     }
 
     [HttpGet("products/{id:int}")]
+    [Authorize(Roles = "super-admin,accountant")]
     public async Task<IActionResult> GetProduct(int id)
     {
         try
@@ -226,6 +251,8 @@ public class InventoryController : ApiControllerBase
     }
 
     [HttpPost("products")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> CreateProduct([FromBody] ProductRequest body)
     {
         try
@@ -311,6 +338,8 @@ public class InventoryController : ApiControllerBase
     }
 
     [HttpPut("products/{id:int}")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> UpdateProduct(int id, [FromBody] ProductRequest body)
     {
         try
@@ -387,6 +416,8 @@ public class InventoryController : ApiControllerBase
     /// inside the same transaction as the insert; see ResolveSku.
     /// </summary>
     [HttpPost("products/sku-preview")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> SkuPreview([FromBody] SkuPreviewRequest body)
     {
         try
@@ -444,6 +475,8 @@ public class InventoryController : ApiControllerBase
     /// Also says whether the code is one of OUR SKUs printed as a barcode.
     /// </summary>
     [HttpGet("barcodes/lookup")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> LookupBarcode([FromQuery] string code, [FromQuery] int? excludeProductId)
     {
         try
@@ -546,6 +579,8 @@ public class InventoryController : ApiControllerBase
     // ══════════════════════════════════════════════════════════════════
 
     [HttpGet("categories")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> GetCategories()
     {
         try
@@ -570,6 +605,8 @@ public class InventoryController : ApiControllerBase
     }
 
     [HttpPost("categories")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> CreateCategory([FromBody] CategoryRequest body)
     {
         try
@@ -608,6 +645,8 @@ public class InventoryController : ApiControllerBase
     }
 
     [HttpPut("categories/{id:int}")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> UpdateCategory(int id, [FromBody] CategoryRequest body)
     {
         try
@@ -642,6 +681,8 @@ public class InventoryController : ApiControllerBase
     }
 
     [HttpGet("brands")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> GetBrands()
     {
         try
@@ -666,6 +707,8 @@ public class InventoryController : ApiControllerBase
     }
 
     [HttpPost("brands")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> CreateBrand([FromBody] BrandRequest body)
     {
         try
@@ -707,6 +750,8 @@ public class InventoryController : ApiControllerBase
     }
 
     [HttpPut("brands/{id:int}")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> UpdateBrand(int id, [FromBody] BrandRequest body)
     {
         try
@@ -749,6 +794,8 @@ public class InventoryController : ApiControllerBase
     /// would reject it anyway, but a clear message beats a 23503 in the log.
     /// </summary>
     [HttpDelete("categories/{id:int}")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> DeleteCategory(int id)
     {
         try
@@ -795,6 +842,8 @@ public class InventoryController : ApiControllerBase
 
     /// <summary>Deletes a brand. Refuses while products still point at it.</summary>
     [HttpDelete("brands/{id:int}")]
+    [Authorize(Roles = "super-admin,accountant")]
+    [Authorize(Policy = "perm:products.manage")]
     public async Task<IActionResult> DeleteBrand(int id)
     {
         try
@@ -872,6 +921,7 @@ public class InventoryController : ApiControllerBase
                 {
                     productId = s.ProductId,
                     sku = s.Product.Sku,
+                    imageUrl = s.Product.ImageUrl,
                     name = s.Product.ProductName,
                     packing = s.Product.Packing,
                     minQty = s.Product.MinQty,
@@ -969,6 +1019,7 @@ public class InventoryController : ApiControllerBase
                     id = m.MovementId,
                     productId = m.ProductId,
                     sku = m.Product.Sku,
+                    imageUrl = m.Product.ImageUrl,
                     name = m.Product.ProductName,
                     locationId = m.LocationId,
                     locationName = m.Location.LocationName,
@@ -1055,6 +1106,7 @@ public class InventoryController : ApiControllerBase
                         lineNo = i.LineNo,
                         productId = i.ProductId,
                         sku = i.Product.Sku,
+                        imageUrl = i.Product.ImageUrl,
                         name = i.Product.ProductName,
                         currentQty = i.CurrentQty,
                         newQty = i.NewQty,
@@ -1142,6 +1194,7 @@ public class InventoryController : ApiControllerBase
                         lineNo = i.LineNo,
                         productId = i.ProductId,
                         sku = i.Product.Sku,
+                        imageUrl = i.Product.ImageUrl,
                         name = i.Product.ProductName,
                         qty = i.Quantity,
                         packing = i.Product.Packing
@@ -1251,6 +1304,7 @@ public class InventoryController : ApiControllerBase
                     {
                         id = p.ProductId,
                         sku = p.Sku,
+                        imageUrl = p.ImageUrl,
                         name = p.ProductName,
                         packing = p.Packing,
                         costPrice = p.CostPrice,
@@ -1732,6 +1786,7 @@ public class InventoryController : ApiControllerBase
 
     /// <summary>The product catalogue on the current filter, as a spreadsheet.</summary>
     [HttpGet("products/export")]
+    [Authorize(Roles = "super-admin,accountant")]
     public async Task<IActionResult> ExportProducts(
         [FromQuery] string? q, [FromQuery] int? categoryId, [FromQuery] int? brandId,
         [FromQuery] string? status, [FromQuery] bool includeInactive = true)
