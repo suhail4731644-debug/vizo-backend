@@ -23,8 +23,13 @@ jobs:
 
       - name: Sync to Account 2
         env:
-          SYNC_TOKEN: ${{ secrets.VIZO-CONNECT }}
+          SYNC_TOKEN: ${{ secrets.VIZO_CONNECT || secrets['VIZO-CONNECT'] }}
         run: |
+          if [ -z "${SYNC_TOKEN}" ]; then
+            echo "SYNC_TOKEN is not configured. Set repository secret VIZO_CONNECT."
+            exit 1
+          fi
+
           git remote add account2 "https://x-access-token:${SYNC_TOKEN}@github.com/vizocompk/vizo-backend.git"
 
           if git ls-remote --exit-code --heads account2 master >/dev/null 2>&1; then
