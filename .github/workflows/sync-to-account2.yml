@@ -1,0 +1,35 @@
+name: Sync Account 1 to Account 2
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  sync:
+    if: github.repository == 'suhail4731644-debug/vizo-backend'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync to Account 2
+        env:
+          SYNC_TOKEN: ${{ secrets.VIZO-CONNECT }}
+        run: |
+          git remote add account2 "https://x-access-token:${SYNC_TOKEN}@github.com/vizocompk/vizo-backend.git"
+
+          if git ls-remote --exit-code --heads account2 master >/dev/null 2>&1; then
+            git fetch account2 master
+            git merge account2/master --no-edit
+          fi
+
+          git push account2 HEAD:master
